@@ -196,7 +196,7 @@ class BlueFlameClient {
     // ══════════════════════════════════════════════
     // AUTO-STATUS POLLING
     // After a POST, extract call_id from the response and auto-poll
-    // GET /functions/status/{call_id} until completion.
+    // GET /output/{call_id} until status changes from PENDING.
     // ══════════════════════════════════════════════
 
     /**
@@ -212,9 +212,8 @@ class BlueFlameClient {
     }
 
     /**
-     * Poll GET /functions/status/{callId} until the status response's
-     * output is populated or status changes from PENDING, or max
-     * retries reached.
+     * Poll GET /output/{callId} until the status changes from PENDING
+     * or output is populated, or max retries reached.
      * Returns the final status response.
      * Fires 'status-poll' custom events for UI updates.
      */
@@ -312,7 +311,7 @@ class BlueFlameClient {
     }
 
     async getCallStatus(callId) {
-        return this.get('/functions/status/' + callId);
+        return this.get('/output/' + callId);
     }
 
     async uploadFile(file, metadata = {}) {

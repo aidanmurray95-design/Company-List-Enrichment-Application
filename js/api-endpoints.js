@@ -153,7 +153,7 @@ const BLUEFLAME_API = {
                 id: 'call-status',
                 name: 'Call Status and Output',
                 method: 'GET',
-                path: '/functions/status/{{call_id}}',
+                path: '/output/{{call_id}}',
                 description: 'Check the status and retrieve the output of a previous API call.',
                 body: '',
                 headers: [
