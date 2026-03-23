@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BlueFlame Financial Extractor</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+<body>
+    <!-- SIDEBAR -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <div class="logo">
+                <div class="logo-icon"><i class="fas fa-fire"></i></div>
+                <div class="logo-text">
+                    <span class="logo-title">BlueFlame</span>
+                    <span class="logo-subtitle">Financial Extractor</span>
+                </div>
+            </div>
+        </div>
+        <nav class="sidebar-nav">
+            <ul>
+                <li class="nav-item active" data-tab="upload">
+                    <i class="fas fa-cloud-upload-alt"></i><span>Upload Documents</span>
+                </li>
+                <li class="nav-item" data-tab="review">
+                    <i class="fas fa-table"></i><span>Review Extractions</span>
+                </li>
+                <li class="nav-item" data-tab="export">
+                    <i class="fas fa-paper-plane"></i><span>Export &amp; Email</span>
+                </li>
+                <li class="nav-item" data-tab="api-explorer">
+                    <i class="fas fa-code"></i><span>API Explorer</span>
+                </li>
+                <!-- Hideable: API Calls -->
+                <li class="nav-item hidden-tab-nav" data-tab="api-calls" id="apiCallsNavItem" style="display:none;">
+                    <i class="fas fa-exchange-alt"></i><span>API Calls</span>
+                    <span class="nav-badge" id="apiCallsBadge">0</span>
+                </li>
+                <!-- Hideable: Configuration -->
+                <li class="nav-item hidden-tab-nav" data-tab="config" id="configNavItem" style="display:none;">
+                    <i class="fas fa-cog"></i><span>Configuration</span>
+                </li>
+            </ul>
+        </nav>
+        <div class="sidebar-footer">
+            <div class="sidebar-footer-toggles">
+                <button class="btn-footer-toggle" id="btnToggleApiCalls" title="Toggle API Calls Log">
+                    <i class="fas fa-exchange-alt"></i><span>API Calls</span>
+                    <span class="toggle-indicator" id="apiCallsToggleIndicator"></span>
+                </button>
+                <button class="btn-footer-toggle" id="btnToggleConfig" title="Toggle Configuration Tab">
+                    <i class="fas fa-key"></i><span>Config</span>
+                    <span class="toggle-indicator" id="configToggleIndicator"></span>
+                </button>
+            </div>
+            <div class="connection-status" id="connectionStatus">
+                <span class="status-dot disconnected"></span>
+                <span class="status-text">Not Connected</span>
+            </div>
+        </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-content" id="mainContent">
+        <header class="top-bar">
+            <button class="btn-menu" id="btnMenu"><i class="fas fa-bars"></i></button>
+            <div class="breadcrumb" id="breadcrumb"><span>Upload Documents</span></div>
+            <div class="top-bar-actions">
+                <button class="btn-icon" id="btnRefresh" title="Refresh"><i class="fas fa-sync-alt"></i></button>
+                <button class="btn-icon" id="btnThemeToggle" title="Toggle Theme"><i class="fas fa-moon"></i></button>
+            </div>
+        </header>
+
+        <!-- ══════════════════════════════════════════════
+             TAB 1: Upload Documents
+             ══════════════════════════════════════════════ -->
+        <section class="tab-content active" id="tab-upload">
+            <div class="tab-header">
+                <h1><i class="fas fa-cloud-upload-alt"></i> Upload Financial Statements</h1>
+                <p>Upload PDF or Excel financial statements for data extraction via BlueFlame</p>
+            </div>
+            <div class="upload-layout">
+                <div class="upload-zone-container">
+                    <div class="card upload-card">
+                        <div class="card-header">
+                            <h3><i class="fas fa-file-upload"></i> Document Upload</h3>
+                            <div class="upload-type-selector">
+                                <button class="chip active" data-type="all">All</button>
+                                <button class="chip" data-type="pdf">PDF</button>
+                                <button class="chip" data-type="excel">Excel</button>
+                            </div>
+                        </div>
+                        <div class="upload-dropzone" id="uploadDropzone">
+                            <div class="dropzone-content">
+                                <div class="dropzone-icon"><i class="fas fa-cloud-upload-alt"></i></div>
+                                <h3>Drag &amp; Drop Financial Statements</h3>
+                                <p>Supports PDF, XLS, XLSX, and CSV files</p>
+                                <div class="dropzone-divider"><span>or</span></div>
+                                <button class="btn btn-primary" id="btnBrowseFiles"><i class="fas fa-folder-open"></i> Browse Files</button>
+                                <input type="file" id="fileInput" multiple accept=".pdf,.xls,.xlsx,.csv" hidden>
+                            </div>
+                        </div>
+                        <div class="upload-options">
+                            <div class="form-group">
+                                <label><i class="fas fa-tags"></i> Document Type</label>
+                                <select id="docTypeSelect" class="form-control">
+                                    <option value="income_statement">Income Statement</option>
+                                    <option value="balance_sheet">Balance Sheet</option>
+                                    <option value="cash_flow">Cash Flow Statement</option>
+                                    <option value="trial_balance">Trial Balance</option>
+                                    <option value="general_ledger">General Ledger</option>
+                                    <option value="other">Other Financial Document</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label><i class="fas fa-building"></i> Entity / Company Name</label>
+                                <input type="text" id="entityName" class="form-control" placeholder="e.g., Acme Corp">
+                            </div>
+                            <div class="form-group">
+                                <label><i class="fas fa-calendar"></i> Reporting Period</label>
+                                <input type="text" id="reportingPeriod" class="form-control" placeholder="e.g., Q4 2024">
+                            </div>
+                            <div class="form-group">
+                                <label><i class="fas fa-cogs"></i> Extraction Method</label>
+                                <select id="extractionMethod" class="form-control">
+                                    <option value="scan">Scan Request (Full Extraction)</option>
+                                    <option value="qna">QnA Request (Question-Based)</option>
+                                    <option value="llm">LLM Request (Prompt-Based)</option>
+                                    <option value="bot">Bot Request (Conversational)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <!-- Bot Prompt Section (shown only when Bot method selected) -->
+                        <div class="bot-prompt-section" id="botPromptSection" style="display:none;">
+                            <div class="form-group" style="padding: 0 20px;">
+                                <label><i class="fas fa-robot"></i> Bot Prompt / Instructions</label>
+                                <textarea id="botPromptInput" class="form-control" rows="4" placeholder="Enter your instructions for the bot, e.g.:&#10;&#10;Please extract all revenue line items, net income, and EBITDA from this income statement. Also identify the reporting entity and fiscal period."></textarea>
+                                <span class="form-hint">This prompt will be sent as the <code>message</code> field in the Bot Request API call. Be specific about what data you need extracted.</span>
+                            </div>
+                        </div>
+                        <!-- Status Polling Progress (shown during extraction) -->
+                        <div class="status-poll-section" id="statusPollSection" style="display:none;">
+                            <div class="status-poll-header">
+                                <i class="fas fa-satellite-dish"></i>
+                                <strong>Auto-Status Polling</strong>
+                                <span class="status-poll-badge" id="statusPollBadge">Waiting...</span>
+                            </div>
+                            <div class="status-poll-log" id="statusPollLog"></div>
+                        </div>
+                        <div class="upload-actions">
+                            <button class="btn btn-primary btn-lg" id="btnSubmitExtraction" disabled>
+                                <i class="fas fa-rocket"></i> Submit for Extraction
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="upload-sidebar">
+                    <div class="card">
+                        <div class="card-header"><h3><i class="fas fa-list"></i> File Queue</h3><button class="btn btn-sm btn-ghost" id="btnClearQueue">Clear All</button></div>
+                        <div class="file-queue" id="fileQueue"><div class="empty-state small"><i class="fas fa-inbox"></i><p>No files queued</p></div></div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header"><h3><i class="fas fa-history"></i> Recent Submissions</h3></div>
+                        <div class="recent-submissions" id="recentSubmissions"><div class="empty-state small"><i class="fas fa-clock"></i><p>No recent submissions</p></div></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════════════════════════════════════
+             TAB 2: Review Extractions
+             ══════════════════════════════════════════════ -->
+        <section class="tab-content" id="tab-review">
+            <div class="tab-header">
+                <h1><i class="fas fa-table"></i> Review Extracted Data</h1>
+                <p>Review, validate, and edit extracted financial datapoints</p>
+            </div>
+            <div class="review-layout">
+                <div class="filter-bar">
+                    <div class="filter-group">
+                        <div class="search-box"><i class="fas fa-search"></i><input type="text" id="reviewSearch" placeholder="Search extractions..."></div>
+                        <select id="reviewStatusFilter" class="form-control">
+                            <option value="all">All Statuses</option><option value="completed">Completed</option><option value="processing">Processing</option><option value="failed">Failed</option><option value="pending">Pending</option>
+                        </select>
+                        <select id="reviewTypeFilter" class="form-control">
+                            <option value="all">All Types</option><option value="income_statement">Income Statement</option><option value="balance_sheet">Balance Sheet</option><option value="cash_flow">Cash Flow</option><option value="trial_balance">Trial Balance</option>
+                        </select>
+                    </div>
+                    <div class="filter-actions"><button class="btn btn-secondary" id="btnRefreshExtractions"><i class="fas fa-sync-alt"></i> Refresh</button></div>
+                </div>
+                <div class="extractions-grid" id="extractionsGrid">
+                    <div class="empty-state"><i class="fas fa-database"></i><h3>No Extractions Found</h3><p>Upload documents to begin extracting financial data</p><button class="btn btn-primary" data-goto="upload"><i class="fas fa-upload"></i> Upload Documents</button></div>
+                </div>
+                <div class="detail-panel" id="detailPanel">
+                    <div class="detail-panel-header"><h2 id="detailTitle">Extraction Details</h2><button class="btn-icon" id="btnCloseDetail"><i class="fas fa-times"></i></button></div>
+                    <div class="detail-panel-body" id="detailBody">
+                        <div class="detail-tabs"><button class="detail-tab active" data-detail="summary">Summary</button><button class="detail-tab" data-detail="datapoints">Datapoints</button><button class="detail-tab" data-detail="raw">Raw JSON</button></div>
+                        <div class="detail-content" id="detailContent"></div>
+                    </div>
+                    <div class="detail-panel-footer">
+                        <button class="btn btn-secondary" id="btnReprocess"><i class="fas fa-redo"></i> Reprocess</button>
+                        <button class="btn btn-primary" id="btnApproveExtraction"><i class="fas fa-check"></i> Approve</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════════════════════════════════════
+             TAB 3: Export & Email
+             ══════════════════════════════════════════════ -->
+        <section class="tab-content" id="tab-export">
+            <div class="tab-header">
+                <h1><i class="fas fa-paper-plane"></i> Export &amp; Email</h1>
+                <p>Export extracted data and send via email</p>
+            </div>
+            <div class="export-layout">
+                <div class="export-main">
+                    <div class="card">
+                        <div class="card-header"><h3><i class="fas fa-check-square"></i> Select Data for Export</h3>
+                            <div class="select-actions"><button class="btn btn-sm btn-ghost" id="btnSelectAll">Select All</button><button class="btn btn-sm btn-ghost" id="btnDeselectAll">Deselect All</button></div>
+                        </div>
+                        <div class="export-selections" id="exportSelections"><div class="empty-state small"><i class="fas fa-database"></i><p>No completed extractions available</p></div></div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header"><h3><i class="fas fa-eye"></i> Export Preview</h3>
+                            <div class="export-format-selector"><button class="chip active" data-format="table">Table</button><button class="chip" data-format="json">JSON</button><button class="chip" data-format="csv">CSV</button></div>
+                        </div>
+                        <div class="export-preview" id="exportPreview"><div class="empty-state small"><i class="fas fa-eye-slash"></i><p>Select extractions to preview</p></div></div>
+                    </div>
+                </div>
+                <div class="export-sidebar">
+                    <div class="card">
+                        <div class="card-header"><h3><i class="fas fa-envelope"></i> Email Configuration</h3></div>
+                        <div class="email-form">
+                            <div class="form-group"><label>To</label><input type="email" id="emailTo" class="form-control" placeholder="recipient@company.com"></div>
+                            <div class="form-group"><label>CC</label><input type="email" id="emailCc" class="form-control" placeholder="cc@company.com"></div>
+                            <div class="form-group"><label>Subject</label><input type="text" id="emailSubject" class="form-control" placeholder="Financial Data Extract"></div>
+                            <div class="form-group"><label>Message</label><textarea id="emailBody" class="form-control" rows="5" placeholder="Please find attached the extracted financial data..."></textarea></div>
+                            <div class="form-group"><label>Attachment Format</label>
+                                <select id="emailFormat" class="form-control"><option value="xlsx">Excel (.xlsx)</option><option value="csv">CSV (.csv)</option><option value="json">JSON (.json)</option><option value="pdf">PDF Report (.pdf)</option></select>
+                            </div>
+                            <div class="form-group checkbox-group"><label><input type="checkbox" id="includeOriginal"> Include original documents</label></div>
+                            <button class="btn btn-primary btn-block" id="btnSendEmail"><i class="fas fa-paper-plane"></i> Send Email</button>
+                            <div class="divider-text"><span>or</span></div>
+                            <button class="btn btn-secondary btn-block" id="btnDownloadExport"><i class="fas fa-download"></i> Download Export</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════════════════════════════════════
+             TAB 4: API Explorer (Postman-style)
+             ══════════════════════════════════════════════ -->
+        <section class="tab-content" id="tab-api-explorer">
+            <div class="tab-header">
+                <h1><i class="fas fa-code"></i> API Explorer</h1>
+                <p>Test and explore all 8 BlueFlame API endpoints — Postman-style testing</p>
+            </div>
+            <!-- Global Variables Banner -->
+            <div class="global-vars-banner" id="globalVarsBanner">
+                <div class="global-vars-title"><i class="fas fa-globe"></i> Global Variables</div>
+                <div class="global-vars-grid">
+                    <div class="global-var-item">
+                        <span class="global-var-name">REST_API_ENDPOINT</span>
+                        <input type="text" class="global-var-value" id="explorerRestEndpoint" placeholder="https://api.blueflame.ai/prod/client/v1">
+                    </div>
+                    <div class="global-var-item">
+                        <span class="global-var-name">API_TOKEN</span>
+                        <div class="global-var-value-group">
+                            <input type="password" class="global-var-value" id="explorerApiToken" placeholder="Your API Token">
+                            <button class="btn-icon btn-icon-sm" id="btnExplorerToggleToken" title="Show/Hide"><i class="fas fa-eye"></i></button>
+                        </div>
+                    </div>
+                    <div class="global-var-item">
+                        <span class="global-var-name">USER_ID</span>
+                        <input type="text" class="global-var-value" id="explorerUserId" placeholder="your.email@company.com">
+                    </div>
+                </div>
+                <div class="global-vars-hint">
+                    <i class="fas fa-info-circle"></i>
+                    Resolved in URLs, headers, and body: <code>{{REST_API_ENDPOINT}}/functions/scan</code> &rarr; <code id="resolvedExample">https://api.blueflame.ai/prod/client/v1/functions/scan</code>
+                </div>
+            </div>
+            <div class="api-layout">
+                <div class="api-sidebar-panel">
+                    <div class="api-categories" id="apiCategories"></div>
+                </div>
+                <div class="api-main-panel">
+                    <div class="card">
+                        <div class="card-header"><h3 id="apiEndpointTitle">Select an API Endpoint</h3></div>
+                        <div class="api-request-builder" id="apiRequestBuilder">
+                            <!-- Auth Banner -->
+                            <div class="api-auth-banner">
+                                <i class="fas fa-shield-alt"></i>
+                                <span>Auth: <strong>X-Api-Key</strong> &larr; <code>{{API_TOKEN}}</code></span>
+                                <span class="api-auth-key-preview" id="apiAuthKeyPreview">No token set</span>
+                            </div>
+                            <!-- Method + URL -->
+                            <div class="api-method-url">
+                                <select id="apiMethod" class="form-control"><option value="GET">GET</option><option value="POST">POST</option></select>
+                                <input type="text" id="apiUrl" class="form-control" placeholder="{{REST_API_ENDPOINT}}/functions/...">
+                                <button class="btn btn-primary" id="btnSendRequest"><i class="fas fa-play"></i> Send</button>
+                            </div>
+                            <!-- Postman-style Tabs: Params | Headers | Body | Auto-Status -->
+                            <div class="explorer-tabs">
+                                <button class="explorer-tab" data-explorer-tab="params"><i class="fas fa-sliders-h"></i> Params</button>
+                                <button class="explorer-tab active" data-explorer-tab="headers"><i class="fas fa-heading"></i> Headers <span class="header-count" id="headerCount">(0)</span></button>
+                                <button class="explorer-tab" data-explorer-tab="body"><i class="fas fa-code"></i> Body</button>
+                                <button class="explorer-tab" data-explorer-tab="autostatus"><i class="fas fa-satellite-dish"></i> Auto-Status</button>
+                            </div>
+                            <!-- Params Tab -->
+                            <div class="explorer-tab-content" id="explorerTabParams" style="display:none;">
+                                <div class="api-section-body">
+                                    <div class="kv-table">
+                                        <div class="kv-table-header">
+                                            <span class="kv-col-check"></span>
+                                            <span class="kv-col-key">Key</span>
+                                            <span class="kv-col-value">Value</span>
+                                            <span class="kv-col-desc">Description</span>
+                                            <span class="kv-col-actions"></span>
+                                        </div>
+                                        <div class="kv-table-body" id="paramsEditor"></div>
+                                    </div>
+                                    <button class="btn btn-sm btn-ghost mt-1" id="btnAddParam"><i class="fas fa-plus"></i> Add Query Param</button>
+                                    <div class="form-hint mt-1">Query parameters are appended to the URL: <code>?key=value&amp;key2=value2</code></div>
+                                </div>
+                            </div>
+                            <!-- Headers Tab -->
+                            <div class="explorer-tab-content" id="explorerTabHeaders">
+                                <div class="api-section-body">
+                                    <div class="kv-table">
+                                        <div class="kv-table-header">
+                                            <span class="kv-col-check"></span>
+                                            <span class="kv-col-key">Key</span>
+                                            <span class="kv-col-value">Value</span>
+                                            <span class="kv-col-desc">Description</span>
+                                            <span class="kv-col-actions"></span>
+                                        </div>
+                                        <div class="kv-table-body" id="headersEditor"></div>
+                                    </div>
+                                    <button class="btn btn-sm btn-ghost mt-1" id="btnAddHeader"><i class="fas fa-plus"></i> Add Header</button>
+                                </div>
+                            </div>
+                            <!-- Body Tab -->
+                            <div class="explorer-tab-content" id="explorerTabBody" style="display:none;">
+                                <div class="api-section-body">
+                                    <div class="body-type-selector">
+                                        <label><input type="radio" name="bodyType" value="json" checked> JSON</label>
+                                        <label><input type="radio" name="bodyType" value="raw"> Raw</label>
+                                        <label><input type="radio" name="bodyType" value="none"> None</label>
+                                        <button class="btn btn-sm btn-ghost" id="btnPrettifyBody" title="Prettify JSON"><i class="fas fa-magic"></i> Prettify</button>
+                                    </div>
+                                    <textarea id="apiBodyContent" class="form-control code-editor" rows="14" placeholder='{"key": "value"}'></textarea>
+                                </div>
+                            </div>
+                            <!-- Auto-Status Tab -->
+                            <div class="explorer-tab-content" id="explorerTabAutostatus" style="display:none;">
+                                <div class="api-section-body">
+                                    <div class="auto-status-config">
+                                        <div class="auto-status-toggle">
+                                            <label class="switch-label">
+                                                <input type="checkbox" id="autoStatusEnabled" checked>
+                                                <span class="switch-slider"></span>
+                                            </label>
+                                            <div>
+                                                <strong>Auto-poll Call Status after POST</strong>
+                                                <span class="form-hint">When enabled, after a POST request returns a <code>call_id</code>, the explorer automatically runs <code>GET /functions/status/{call_id}</code> until the job completes.</span>
+                                            </div>
+                                        </div>
+                                        <div class="auto-status-settings">
+                                            <div class="form-group">
+                                                <label>Poll Interval (ms)</label>
+                                                <input type="number" id="autoStatusInterval" class="form-control" value="3000" min="1000" max="30000" step="500">
+                                            </div>
+                                            <div class="form-group">
+                                                <label>Max Retries</label>
+                                                <input type="number" id="autoStatusMaxRetries" class="form-control" value="20" min="1" max="100">
+                                            </div>
+                                        </div>
+                                        <div class="auto-status-log" id="explorerAutoStatusLog">
+                                            <div class="empty-state small"><i class="fas fa-satellite-dish"></i><p>Status polling log will appear here after a POST request</p></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Response -->
+                            <div class="api-section" style="border-top: 2px solid var(--color-brand);">
+                                <div class="api-section-header">
+                                    <h4><i class="fas fa-reply"></i> Response</h4>
+                                    <span class="response-meta" id="responseMeta"></span>
+                                </div>
+                                <div class="api-section-body">
+                                    <div class="response-tabs">
+                                        <button class="response-tab active" data-resp="body">Body</button>
+                                        <button class="response-tab" data-resp="headers">Headers</button>
+                                        <button class="response-tab" data-resp="status-result">Auto-Status Result</button>
+                                    </div>
+                                    <div class="api-response" id="apiResponse">
+                                        <pre><code>// Response will appear here after sending a request</code></pre>
+                                    </div>
+                                    <div class="api-response-headers" id="apiResponseHeaders" style="display:none;">
+                                        <pre><code>// Response headers will appear here</code></pre>
+                                    </div>
+                                    <div class="api-response-status-result" id="apiResponseStatusResult" style="display:none;">
+                                        <pre><code>// Auto-status polling result will appear here after POST requests</code></pre>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════════════════════════════════════
+             TAB 5: API Calls (Hideable)
+             ══════════════════════════════════════════════ -->
+        <section class="tab-content" id="tab-api-calls">
+            <div class="tab-header">
+                <h1><i class="fas fa-exchange-alt"></i> API Calls Log</h1>
+                <p>View all outgoing API requests and their responses</p>
+            </div>
+            <div class="api-calls-layout">
+                <div class="api-calls-toolbar">
+                    <div class="api-calls-toolbar-left">
+                        <div class="search-box"><i class="fas fa-search"></i><input type="text" id="apiCallsSearch" placeholder="Filter by URL, method, or status..."></div>
+                        <select id="apiCallsFilterSource" class="form-control">
+                            <option value="all">All Sources</option>
+                            <option value="client">App Requests</option>
+                            <option value="explorer">Explorer Requests</option>
+                        </select>
+                        <select id="apiCallsFilterStatus" class="form-control">
+                            <option value="all">All Statuses</option>
+                            <option value="success">2xx Success</option>
+                            <option value="client-error">4xx Client Error</option>
+                            <option value="server-error">5xx Server Error</option>
+                            <option value="network-error">Network Error</option>
+                        </select>
+                    </div>
+                    <div class="api-calls-toolbar-right">
+                        <button class="btn btn-sm btn-ghost" id="btnClearApiCalls"><i class="fas fa-trash"></i> Clear Log</button>
+                        <button class="btn btn-sm btn-secondary" id="btnExportApiCalls"><i class="fas fa-download"></i> Export</button>
+                    </div>
+                </div>
+                <div class="api-calls-list" id="apiCallsList">
+                    <div class="empty-state"><i class="fas fa-exchange-alt"></i><h3>No API Calls Yet</h3><p>API calls will appear here as you interact with BlueFlame</p></div>
+                </div>
+                <div class="api-call-detail-drawer" id="apiCallDetailDrawer">
+                    <div class="api-call-detail-header">
+                        <h3 id="apiCallDetailTitle">Request Details</h3>
+                        <button class="btn-icon" id="btnCloseCallDetail"><i class="fas fa-times"></i></button>
+                    </div>
+                    <div class="api-call-detail-body" id="apiCallDetailBody"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════════════════════════════════════
+             TAB 6: Configuration (Hideable)
+             ══════════════════════════════════════════════ -->
+        <section class="tab-content" id="tab-config">
+            <div class="tab-header">
+                <h1><i class="fas fa-cog"></i> Configuration</h1>
+                <p>Manage your BlueFlame API credentials and global variables</p>
+            </div>
+            <div class="config-layout">
+
+                <!-- Main credentials card -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-key"></i> BlueFlame API Credentials</h3>
+                        <span class="badge" id="credentialStatus">Not Configured</span>
+                    </div>
+                    <div class="config-form">
+                        <div class="config-hero">
+                            <div class="config-hero-icon"><i class="fas fa-fire"></i></div>
+                            <div class="config-hero-text">
+                                <h4>Connect to BlueFlame</h4>
+                                <p>Enter your credentials below. These are stored as global variables used across all API requests.</p>
+                            </div>
+                        </div>
+
+                        <!-- Global Variables Table -->
+                        <div class="config-global-vars">
+                            <div class="config-gv-header">
+                                <i class="fas fa-globe"></i>
+                                <strong>Global Variables</strong>
+                                <span class="config-gv-hint">Used as <code>{{VARIABLE_NAME}}</code> in all API URLs, headers, and request bodies</span>
+                            </div>
+                            <div class="config-gv-table">
+                                <div class="config-gv-row config-gv-row-header">
+                                    <span class="config-gv-col-var">Variable</span>
+                                    <span class="config-gv-col-val">Value</span>
+                                    <span class="config-gv-col-usage">Used As</span>
+                                </div>
+                                <div class="config-gv-row">
+                                    <span class="config-gv-col-var"><code class="gv-name">REST_API_ENDPOINT</code></span>
+                                    <span class="config-gv-col-val">
+                                        <input type="text" id="cfgRestEndpoint" class="form-control" placeholder="https://api.blueflame.ai/prod/client/v1" value="https://api.blueflame.ai/prod/client/v1">
+                                    </span>
+                                    <span class="config-gv-col-usage"><code>{{REST_API_ENDPOINT}}/functions/scan</code></span>
+                                </div>
+                                <div class="config-gv-row">
+                                    <span class="config-gv-col-var"><code class="gv-name">API_TOKEN</code></span>
+                                    <span class="config-gv-col-val">
+                                        <div class="input-with-action">
+                                            <input type="password" id="cfgApiToken" class="form-control" placeholder="Paste your API token here...">
+                                            <button class="btn-icon" id="btnToggleApiToken" title="Show/Hide Token"><i class="fas fa-eye"></i></button>
+                                        </div>
+                                    </span>
+                                    <span class="config-gv-col-usage"><code>X-Api-Key: {{API_TOKEN}}</code></span>
+                                </div>
+                                <div class="config-gv-row">
+                                    <span class="config-gv-col-var"><code class="gv-name">USER_ID</code></span>
+                                    <span class="config-gv-col-val">
+                                        <input type="email" id="cfgUserId" class="form-control" placeholder="your.email@company.com">
+                                        <span class="form-hint">Maps to user's email &mdash; included in all request bodies as <code>user_id</code></span>
+                                    </span>
+                                    <span class="config-gv-col-usage"><code>"user_id": "{{USER_ID}}"</code></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="config-auth-type">
+                            <div class="config-auth-type-icon"><i class="fas fa-shield-alt"></i></div>
+                            <div class="config-auth-type-info">
+                                <strong>Auth Header: X-Api-Key</strong>
+                                <span>Every request sends: <code>X-Api-Key: &lt;API_TOKEN value&gt;</code> + <code>"user_id": "&lt;USER_ID&gt;"</code> in body</span>
+                            </div>
+                        </div>
+
+                        <!-- User Info -->
+                        <div class="config-fields">
+                            <div class="form-group">
+                                <label><i class="fas fa-user"></i> Name</label>
+                                <input type="text" id="cfgName" class="form-control form-control-lg" placeholder="Your full name (e.g., John Smith)">
+                                <span class="form-hint">Display name for the application</span>
+                            </div>
+                            <div class="form-group">
+                                <label><i class="fas fa-envelope"></i> Email (ID)</label>
+                                <input type="email" id="cfgEmail" class="form-control form-control-lg" placeholder="your.email@company.com">
+                                <span class="form-hint">Your BlueFlame account email. When changed, USER_ID is auto-synced to this value.</span>
+                            </div>
+                        </div>
+
+                        <div class="config-actions">
+                            <button class="btn btn-primary btn-lg" id="btnSaveCredentials"><i class="fas fa-save"></i> Save &amp; Connect</button>
+                            <button class="btn btn-secondary btn-lg" id="btnTestConnection"><i class="fas fa-plug"></i> Test Connection</button>
+                            <button class="btn btn-ghost" id="btnClearCredentials"><i class="fas fa-trash"></i> Clear All</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Connection Status -->
+                <div class="card" id="configStatusCard">
+                    <div class="card-header"><h3><i class="fas fa-signal"></i> Connection Status</h3></div>
+                    <div class="config-form">
+                        <div class="config-status-grid">
+                            <div class="config-status-item">
+                                <div class="config-status-icon" id="statusIconApi"><i class="fas fa-circle"></i></div>
+                                <div class="config-status-info"><strong>API Connection</strong><span id="statusTextApi">Not connected</span></div>
+                            </div>
+                            <div class="config-status-item">
+                                <div class="config-status-icon" id="statusIconEndpoint"><i class="fas fa-circle"></i></div>
+                                <div class="config-status-info"><strong>REST_API_ENDPOINT</strong><span id="statusTextEndpoint">Not set</span></div>
+                            </div>
+                            <div class="config-status-item">
+                                <div class="config-status-icon" id="statusIconAuth"><i class="fas fa-circle"></i></div>
+                                <div class="config-status-info"><strong>API_TOKEN</strong><span id="statusTextAuth">No token configured</span></div>
+                            </div>
+                            <div class="config-status-item">
+                                <div class="config-status-icon" id="statusIconUserId"><i class="fas fa-circle"></i></div>
+                                <div class="config-status-info"><strong>USER_ID</strong><span id="statusTextUserId">Not set</span></div>
+                            </div>
+                            <div class="config-status-item">
+                                <div class="config-status-icon" id="statusIconUser"><i class="fas fa-circle"></i></div>
+                                <div class="config-status-info"><strong>User Profile</strong><span id="statusTextUser">Not set</span></div>
+                            </div>
+                        </div>
+                        <div class="config-info-box" id="configConnectedInfo" style="display:none;">
+                            <div class="config-info-row"><span class="config-info-label">Logged in as:</span><span class="config-info-value" id="infoUserName">&mdash;</span></div>
+                            <div class="config-info-row"><span class="config-info-label">Email:</span><span class="config-info-value" id="infoUserEmail">&mdash;</span></div>
+                            <div class="config-info-row"><span class="config-info-label">USER_ID:</span><span class="config-info-value" id="infoUserId">&mdash;</span></div>
+                            <div class="config-info-row"><span class="config-info-label">REST_API_ENDPOINT:</span><span class="config-info-value" id="infoEndpoint">&mdash;</span></div>
+                            <div class="config-info-row"><span class="config-info-label">Auth method:</span><span class="config-info-value">X-Api-Key: {{API_TOKEN}}</span></div>
+                            <div class="config-info-row"><span class="config-info-label">Last connected:</span><span class="config-info-value" id="infoLastConnected">&mdash;</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Danger Zone -->
+                <div class="card card-danger">
+                    <div class="card-header"><h3><i class="fas fa-exclamation-triangle"></i> Danger Zone</h3></div>
+                    <div class="config-form">
+                        <div class="danger-actions">
+                            <div class="danger-item"><div><strong>Reset All Settings</strong><p>Clear all configuration, cached data, and local storage</p></div><button class="btn btn-danger" id="btnResetAll">Reset All</button></div>
+                            <div class="danger-item"><div><strong>Purge Extraction Cache</strong><p>Remove all locally cached extraction results</p></div><button class="btn btn-danger" id="btnPurgeCache">Purge</button></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Toast Container -->
+        <div class="toast-container" id="toastContainer"></div>
+
+        <!-- Modal -->
+        <div class="modal-overlay" id="modalOverlay">
+            <div class="modal" id="modal">
+                <div class="modal-header"><h3 id="modalTitle">Modal Title</h3><button class="btn-icon" id="btnCloseModal"><i class="fas fa-times"></i></button></div>
+                <div class="modal-body" id="modalBody"></div>
+                <div class="modal-footer" id="modalFooter"><button class="btn btn-secondary" id="btnModalCancel">Cancel</button><button class="btn btn-primary" id="btnModalConfirm">Confirm</button></div>
+            </div>
+        </div>
+    </main>
+
+    <script src="js/api-endpoints.js"></script>
+    <script src="js/blueflame-api.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
