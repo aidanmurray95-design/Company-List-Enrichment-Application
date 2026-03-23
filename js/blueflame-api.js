@@ -316,13 +316,25 @@ class BlueFlameClient {
     }
 
     async uploadFile(file, metadata = {}) {
-        const formData = new FormData();
-        formData.append('file', file);
-        if (this.userId) formData.append('user_id', this.userId);
-        Object.entries(metadata).forEach(([k, v]) => { if (v) formData.append(k, v); });
-        const headers = {};
-        if (this.apiToken) headers['Authorization'] = 'Bearer ' + this.apiToken;
-        return this.request('POST', '/functions/upload', formData, headers);
+        // Convert file to base64 — API expects JSON, not multipart/form-data
+        const base64 = await this._fileToBase64(file);
+        const body = {
+            file: base64,
+            file_name: file.name,
+            content_type: file.type || 'application/octet-stream',
+            user_id: this.userId
+        };
+        if (Object.keys(metadata).length > 0) body.metadata = metadata;
+        return this.post('/functions/upload', body);
+    }
+
+    _fileToBase64(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
     }
 
     async testConnection() {

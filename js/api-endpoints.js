@@ -169,14 +169,16 @@ const BLUEFLAME_API = {
                 name: 'File Upload',
                 method: 'POST',
                 path: '/functions/upload',
-                description: 'Upload a file (PDF, Excel, CSV) for processing. Uses multipart/form-data.',
+                description: 'Upload a file (PDF, Excel, CSV) for processing. File sent as base64 in JSON body.',
                 body: JSON.stringify({
-                    _note: "This endpoint uses multipart/form-data. Use the Upload tab for file uploads.",
-                    file: "(binary)",
+                    file: "(base64-encoded file content)",
+                    file_name: "Financial_Statement_Q4_2024.pdf",
+                    content_type: "application/pdf",
                     user_id: "{{USER_ID}}",
                     metadata: { name: "Financial_Statement_Q4_2024.pdf", type: "income_statement", entity: "Acme Corp" }
                 }, null, 2),
                 headers: [
+                    { key: 'Content-Type', value: 'application/json', enabled: true, description: 'Request content type' },
                     { key: 'Authorization', value: 'Bearer {{API_TOKEN}}', enabled: true, description: 'Bearer auth token' }
                 ],
                 autoStatus: true
