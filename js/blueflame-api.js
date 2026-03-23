@@ -21,8 +21,8 @@ class BlueFlameClient {
     constructor() {
         this.name = '';
         this.email = '';
-        this.statusPollInterval = 10000;  // 10s between status polls
-        this.statusPollMaxRetries = 30;   // 30 attempts × 10s = 5 minutes max
+        this.statusPollInterval = 20000;  // 20s between status polls
+        this.statusPollMaxRetries = 15;   // 15 attempts × 20s = 5 minutes max
         this.loadConfig();
     }
 
@@ -196,7 +196,7 @@ class BlueFlameClient {
     // ══════════════════════════════════════════════
     // AUTO-STATUS POLLING
     // After a POST, extract call_id from the response and auto-poll
-    // POST /functions/status with {"call_id": "<id>"} until completion.
+    // GET /functions/status/{call_id} until completion.
     // ══════════════════════════════════════════════
 
     /**
@@ -212,9 +212,9 @@ class BlueFlameClient {
     }
 
     /**
-     * Poll POST /functions/status with {"call_id": callId} until
-     * the status response's output is populated or status changes
-     * from PENDING, or max retries reached.
+     * Poll GET /functions/status/{callId} until the status response's
+     * output is populated or status changes from PENDING, or max
+     * retries reached.
      * Returns the final status response.
      * Fires 'status-poll' custom events for UI updates.
      */
@@ -312,7 +312,7 @@ class BlueFlameClient {
     }
 
     async getCallStatus(callId) {
-        return this.post('/functions/status', { call_id: callId });
+        return this.get('/functions/status/' + callId);
     }
 
     async uploadFile(file, metadata = {}) {

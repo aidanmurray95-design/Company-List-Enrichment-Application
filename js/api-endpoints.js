@@ -152,14 +152,11 @@ const BLUEFLAME_API = {
             {
                 id: 'call-status',
                 name: 'Call Status and Output',
-                method: 'POST',
-                path: '/functions/status',
+                method: 'GET',
+                path: '/functions/status/{{call_id}}',
                 description: 'Check the status and retrieve the output of a previous API call.',
-                body: JSON.stringify({
-                    call_id: "{{call_id}}"
-                }, null, 2),
+                body: '',
                 headers: [
-                    { key: 'Content-Type', value: 'application/json', enabled: true, description: 'Request content type' },
                     { key: 'Authorization', value: 'Bearer {{API_TOKEN}}', enabled: true, description: 'Bearer auth token' }
                 ],
                 autoStatus: false
