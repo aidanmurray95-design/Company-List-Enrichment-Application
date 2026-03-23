@@ -21,8 +21,8 @@ class BlueFlameClient {
     constructor() {
         this.name = '';
         this.email = '';
-        this.statusPollInterval = 3000;   // ms between status polls
-        this.statusPollMaxRetries = 20;   // max poll attempts
+        this.statusPollInterval = 10000;  // 10s between status polls
+        this.statusPollMaxRetries = 30;   // 30 attempts × 10s = 5 minutes max
         this.loadConfig();
     }
 
