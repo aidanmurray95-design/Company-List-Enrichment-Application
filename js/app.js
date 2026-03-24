@@ -218,76 +218,35 @@
 
         for (const fileItem of files) {
             fileItem.status = 'uploading';
-            addPollLogEntry('fa-upload', `Uploading: ${fileItem.name}...`, '');
-            const metadata = { name: fileItem.name, type: docType, entity, period, submitted_by: client.userId || client.email || 'anonymous' };
+            let callId = null;
+            const docId = generateDocumentId(fileItem.name);
 
             try {
-                // ── Step 1: Upload file ──
-                const uploadResult = await client.uploadFile(fileItem.file, metadata);
-                let docId = null, callId = null;
+                // ── Step 1: Convert file to base64 and send directly with extraction request ──
+                addPollLogEntry('fa-file-export', `Converting ${fileItem.name} to base64...`, '');
+                const base64 = await client._fileToBase64(fileItem.file);
+                const filePayload = {
+                    base64,
+                    name: fileItem.name,
+                    contentType: fileItem.file.type || 'application/octet-stream'
+                };
+                addPollLogEntry('fa-check-circle', `File encoded (${formatFileSize(fileItem.size)}). Sending ${method.toUpperCase()} request...`, 'poll-success');
 
-                if (!uploadResult.ok) {
-                    addPollLogEntry('fa-times-circle', `Upload failed: ${uploadResult.status} ${uploadResult.statusText}`, 'poll-error');
-                    fileItem.status = 'error';
-                    addExtractionRecord(fileItem, generateId(), null, method);
-                    continue;
-                }
-
-                const uploadCallId = client._extractCallId(uploadResult.data);
-                addPollLogEntry('fa-check-circle', `Upload accepted. call_id: ${uploadCallId}`, 'poll-success');
-
-                // ── Step 2: Poll upload status until complete to get document_id ──
-                if (uploadCallId) {
-                    addPollLogEntry('fa-satellite-dish', `Polling upload status for call_id: ${uploadCallId}...`, 'poll-info');
-                    $('#statusPollBadge').textContent = 'Upload: Polling...';
-                    $('#statusPollBadge').className = 'status-poll-badge polling';
-
-                    const uploadStatusResult = await client.pollStatus(uploadCallId, (update) => {
-                        addPollLogEntry('fa-sync-alt', `Upload status poll #${update.attempt}: ${update.status || 'pending'}`, 'poll-info');
-                        $('#statusPollBadge').textContent = `Upload poll #${update.attempt}: ${update.status || 'pending'}`;
-                    });
-
-                    if (uploadStatusResult && (uploadStatusResult.ok || uploadStatusResult.data?.output != null)) {
-                        const uploadOutput = uploadStatusResult.data?.output;
-                        const uploadStatus = String(uploadStatusResult.data?.status || '').toLowerCase();
-                        // Try to extract document_id from the upload output
-                        docId = extractDocumentId(uploadOutput);
-                        if (docId) {
-                            addPollLogEntry('fa-check-circle', `Upload complete. document_id: ${docId}`, 'poll-success');
-                        } else {
-                            // Generate a unique document_id so extraction can proceed
-                            docId = generateDocumentId(fileItem.name);
-                            addPollLogEntry('fa-info-circle', `Upload status: ${uploadStatus}. No document_id in output — generated: ${docId}`, 'poll-warning');
-                            addPollLogEntry('fa-info-circle', `Output received: ${typeof uploadOutput === 'object' ? JSON.stringify(uploadOutput) : uploadOutput}`, 'poll-warning');
-                        }
-                    } else {
-                        // Upload polling timed out or failed — generate a document_id to attempt extraction anyway
-                        docId = generateDocumentId(fileItem.name);
-                        addPollLogEntry('fa-exclamation-triangle', `Upload polling ended: ${uploadStatusResult?.statusText || 'timeout'}. Generated document_id: ${docId}`, 'poll-warning');
-                    }
-                } else {
-                    // No call_id from upload — generate a document_id to attempt extraction
-                    docId = generateDocumentId(fileItem.name);
-                    addPollLogEntry('fa-exclamation-triangle', `Upload did not return a call_id. Generated document_id: ${docId}`, 'poll-warning');
-                }
-
-                // ── Step 3: Send extraction request using document_id ──
                 let extractResult;
-                addPollLogEntry('fa-cogs', `Sending ${method.toUpperCase()} extraction request for document: ${docId}...`, '');
+                const prompt = botPrompt || `Please extract all financial datapoints from the uploaded ${formatDocType(docType)}.`;
 
                 switch (method) {
                     case 'scan':
-                        extractResult = await client.sendScanRequest(docId, docType);
+                        extractResult = await client.sendScanRequest(docId, docType, [], {}, filePayload);
                         break;
                     case 'qna':
-                        extractResult = await client.sendQnARequest(`Extract all key financial datapoints from this ${formatDocType(docType)}`, docId);
+                        extractResult = await client.sendQnARequest(`Extract all key financial datapoints from this ${formatDocType(docType)}`, docId, {}, filePayload);
                         break;
                     case 'llm':
-                        extractResult = await client.sendLLMRequest(`Analyze and extract all financial metrics from document ${docId}. Document type: ${formatDocType(docType)}. Entity: ${entity}. Period: ${period}.`);
+                        extractResult = await client.sendLLMRequest(`Analyze and extract all financial metrics. Document type: ${formatDocType(docType)}. Entity: ${entity}. Period: ${period}.`, '', {}, filePayload);
                         break;
                     case 'bot': {
-                        const message = botPrompt || `Please extract all financial datapoints from the uploaded ${formatDocType(docType)}.`;
-                        extractResult = await client.sendBotRequest(message, docId);
+                        extractResult = await client.sendBotRequest(prompt, docId, '', {}, filePayload);
                         break;
                     }
                 }
@@ -296,40 +255,40 @@
 
                 if (extractResult && extractResult.ok) {
                     callId = client._extractCallId(extractResult.data);
-                    addPollLogEntry('fa-check-circle', `Extraction request accepted. call_id: ${callId || 'none'}`, 'poll-success');
+                    addPollLogEntry('fa-check-circle', `Request accepted. call_id: ${callId || 'none'}`, 'poll-success');
 
-                    // ── Step 4: Poll extraction status until complete ──
+                    // ── Step 2: Poll status until complete ──
                     if (callId) {
-                        addPollLogEntry('fa-satellite-dish', `Polling extraction status for call_id: ${callId}...`, 'poll-info');
-                        $('#statusPollBadge').textContent = 'Extraction: Polling...';
+                        addPollLogEntry('fa-satellite-dish', `Polling status for call_id: ${callId}...`, 'poll-info');
+                        $('#statusPollBadge').textContent = 'Polling...';
                         $('#statusPollBadge').className = 'status-poll-badge polling';
 
                         const statusResult = await client.pollStatus(callId, (update) => {
-                            addPollLogEntry('fa-sync-alt', `Extraction status poll #${update.attempt}: ${update.status || 'pending'}`, 'poll-info');
-                            $('#statusPollBadge').textContent = `Extraction poll #${update.attempt}: ${update.status || 'pending'}`;
+                            addPollLogEntry('fa-sync-alt', `Status poll #${update.attempt}: ${update.status || 'pending'}`, 'poll-info');
+                            $('#statusPollBadge').textContent = `Poll #${update.attempt}: ${update.status || 'pending'}`;
                         });
 
                         if (statusResult && (statusResult.ok || statusResult.data?.output != null)) {
                             const finalStatus = statusResult.data?.status || 'unknown';
                             extractionOutput = statusResult.data?.output;
                             const hasOutput = extractionOutput != null;
-                            addPollLogEntry('fa-flag-checkered', `Extraction final status: ${finalStatus}${hasOutput ? ' (output received)' : ''}`, ['completed', 'complete', 'success', 'done'].includes(finalStatus.toLowerCase()) || hasOutput ? 'poll-success' : 'poll-warning');
+                            addPollLogEntry('fa-flag-checkered', `Final status: ${finalStatus}${hasOutput ? ' (output received)' : ''}`, ['completed', 'complete', 'success', 'done'].includes(finalStatus.toLowerCase()) || hasOutput ? 'poll-success' : 'poll-warning');
                             $('#statusPollBadge').textContent = finalStatus;
                             $('#statusPollBadge').className = 'status-poll-badge ' + (['completed', 'complete', 'success', 'done'].includes(finalStatus.toLowerCase()) || hasOutput ? 'completed' : 'failed');
 
                             if (hasOutput) {
-                                addPollLogEntry('fa-database', `Extraction output captured for review.`, 'poll-success');
+                                addPollLogEntry('fa-database', `Output captured for review.`, 'poll-success');
                             }
                         } else {
-                            addPollLogEntry('fa-times-circle', `Extraction polling ended: ${statusResult?.statusText || 'timeout'}`, 'poll-error');
+                            addPollLogEntry('fa-times-circle', `Polling ended: ${statusResult?.statusText || 'timeout'}`, 'poll-error');
                             $('#statusPollBadge').textContent = 'Timeout';
                             $('#statusPollBadge').className = 'status-poll-badge failed';
                         }
                     } else {
-                        addPollLogEntry('fa-info-circle', 'No call_id from extraction — skipping status poll', 'poll-warning');
+                        addPollLogEntry('fa-info-circle', 'No call_id returned — skipping status poll', 'poll-warning');
                     }
                 } else {
-                    addPollLogEntry('fa-times-circle', `Extraction failed: ${extractResult?.status} ${extractResult?.statusText}`, 'poll-error');
+                    addPollLogEntry('fa-times-circle', `Request failed: ${extractResult?.status} ${extractResult?.statusText}`, 'poll-error');
                 }
 
                 fileItem.status = extractionOutput != null ? 'success' : (callId ? 'processing' : 'error');
@@ -338,7 +297,7 @@
                 fileItem.status = 'error';
                 addPollLogEntry('fa-times-circle', `Error: ${fileItem.name} — ${err.message}`, 'poll-error');
                 showToast(`Error: ${fileItem.name} — ${err.message}`, 'error');
-                addExtractionRecord(fileItem, null, null, method, null);
+                addExtractionRecord(fileItem, docId, null, method, null);
             }
         }
 

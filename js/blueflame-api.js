@@ -269,11 +269,17 @@ class BlueFlameClient {
 
     // ── 8 BlueFlame API commands ──
 
-    async sendLLMRequest(prompt, context = '', params = {}) {
-        return this.post('/functions/llm', {
+    async sendLLMRequest(prompt, context = '', params = {}, file = null) {
+        const body = {
             prompt, context, user_id: this.userId,
             parameters: { temperature: params.temperature ?? 0.2, max_tokens: params.max_tokens ?? 2048, ...params }
-        });
+        };
+        if (file) {
+            body.file = file.base64;
+            body.file_name = file.name;
+            body.content_type = file.contentType;
+        }
+        return this.post('/functions/llm', body);
     }
 
     async sendLLMRequestModel(model, prompt, context = '', params = {}) {
@@ -287,27 +293,45 @@ class BlueFlameClient {
         return this.post('/functions/models', {});
     }
 
-    async sendQnARequest(question, documentId, options = {}) {
-        return this.post('/functions/qna', {
+    async sendQnARequest(question, documentId, options = {}, file = null) {
+        const body = {
             question, document_id: documentId, user_id: this.userId,
             context: options.context || '',
             options: { return_source: options.return_source ?? true, confidence_threshold: options.confidence_threshold ?? 0.7 }
-        });
+        };
+        if (file) {
+            body.file = file.base64;
+            body.file_name = file.name;
+            body.content_type = file.contentType;
+        }
+        return this.post('/functions/qna', body);
     }
 
-    async sendScanRequest(documentId, scanType = 'financial_statement', fields = [], options = {}) {
-        return this.post('/functions/scan', {
+    async sendScanRequest(documentId, scanType = 'financial_statement', fields = [], options = {}, file = null) {
+        const body = {
             document_id: documentId, scan_type: scanType, user_id: this.userId,
             extract_fields: fields.length > 0 ? fields : ['revenue','net_income','total_assets','total_liabilities','cash_flow','ebitda'],
             options: { extract_tables: options.extract_tables ?? true, extract_key_values: options.extract_key_values ?? true, ocr_enabled: options.ocr_enabled ?? true }
-        });
+        };
+        if (file) {
+            body.file = file.base64;
+            body.file_name = file.name;
+            body.content_type = file.contentType;
+        }
+        return this.post('/functions/scan', body);
     }
 
-    async sendBotRequest(message, documentId = '', sessionId = '', options = {}) {
-        return this.post('/functions/bot', {
+    async sendBotRequest(message, documentId = '', sessionId = '', options = {}, file = null) {
+        const body = {
             message, session_id: sessionId, document_id: documentId, user_id: this.userId,
             options: { stream: options.stream ?? false, include_sources: options.include_sources ?? true }
-        });
+        };
+        if (file) {
+            body.file = file.base64;
+            body.file_name = file.name;
+            body.content_type = file.contentType;
+        }
+        return this.post('/functions/bot', body);
     }
 
     async getCallStatus(callId) {
