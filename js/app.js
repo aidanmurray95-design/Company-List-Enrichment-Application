@@ -490,29 +490,34 @@
                 });
                 break;
             case 'mapped': {
-                if (!ext.datapoints || ext.datapoints.length === 0) {
-                    container.innerHTML = '<div class="empty-state small"><i class="fas fa-table"></i><p>No datapoints extracted</p></div>';
-                    return;
-                }
-                const { mapped } = classifyDatapoints(ext.datapoints);
-                if (mapped.length === 0) {
-                    container.innerHTML = '<div class="empty-state small"><i class="fas fa-check-circle"></i><p>No mapped datapoints — check the Unmapped tab</p></div>';
-                    return;
-                }
-                container.innerHTML = renderMappedDatapoints(mapped);
+                const { mapped, unmapped } = classifyDatapoints(ext.datapoints || []);
+                container.innerHTML = renderMappedSchemaView(mapped, unmapped.length);
                 break;
             }
             case 'unmapped': {
-                if (!ext.datapoints || ext.datapoints.length === 0) {
-                    container.innerHTML = '<div class="empty-state small"><i class="fas fa-table"></i><p>No datapoints extracted</p></div>';
-                    return;
-                }
-                const { unmapped } = classifyDatapoints(ext.datapoints);
-                if (unmapped.length === 0) {
-                    container.innerHTML = '<div class="empty-state small"><i class="fas fa-check-circle" style="color:var(--color-brand)"></i><p>All datapoints mapped successfully!</p></div>';
-                    return;
-                }
+                const { unmapped } = classifyDatapoints(ext.datapoints || []);
                 container.innerHTML = renderUnmappedDatapoints(unmapped);
+                // Attach dropdown change handlers
+                container.querySelectorAll('.unmapped-remap-select').forEach(sel => {
+                    sel.addEventListener('change', () => {
+                        if (!sel.value || !ext) return;
+                        const idx = parseInt(sel.dataset.idx);
+                        const dp = unmapped[idx];
+                        const [stmt, field] = sel.value.split('||');
+                        const category = SCHEMA_MAP[stmt]?.items?.[field] || '—';
+                        // Update the datapoint in the extraction record
+                        const origLabel = dp.source_label || dp.label || dp.field || '';
+                        Object.assign(dp, { field, statement: stmt, category, source_label: origLabel });
+                        // Find and update in ext.datapoints
+                        const match = ext.datapoints.find(d =>
+                            (d.label || d.field || '') === (dp.label || dp.field || '') &&
+                            String(d.value) === String(dp.value));
+                        if (match) Object.assign(match, { field, statement: stmt, category, source_label: origLabel });
+                        saveExtractions();
+                        showToast(`Mapped "${origLabel}" → ${field} (${stmt})`, 'success');
+                        renderDetailContent('unmapped');
+                    });
+                });
                 break;
             }
             case 'raw':
@@ -1706,60 +1711,102 @@
         return { mapped, unmapped };
     }
 
-    /** Render mapped datapoints grouped by financial statement */
-    function renderMappedDatapoints(mapped) {
+    /**
+     * Render the Mapped tab as a preset schema with values filled in.
+     * Every canonical line item is shown — populated ones have values, empty ones show '—'.
+     */
+    function renderMappedSchemaView(mapped, unmappedCount) {
         const stmtOrder = ['IS', 'BS', 'CF'];
-        const groups = {};
+        // Index mapped datapoints by statement+field for fast lookup
+        const index = {};
         mapped.forEach(dp => {
-            const key = dp.statement || 'OTHER';
-            if (!groups[key]) groups[key] = [];
-            groups[key].push(dp);
+            const key = `${dp.statement}||${dp.field}`;
+            if (!index[key]) index[key] = [];
+            index[key].push(dp);
         });
 
-        let html = `<div class="mapped-summary"><span class="badge success">${mapped.length} mapped</span></div>`;
-        stmtOrder.forEach(key => {
-            if (!groups[key] || groups[key].length === 0) return;
-            const schema = SCHEMA_MAP[key];
-            html += `<div class="stmt-group"><h4 class="stmt-group-title"><i class="fas ${schema.icon}"></i> ${schema.name} <span class="stmt-count">(${groups[key].length})</span></h4>`;
-            html += `<table class="datapoint-table"><thead><tr><th>Line Item</th><th>Category</th><th>Value</th><th>Period</th><th>Source Label</th></tr></thead><tbody>`;
+        const populatedCount = mapped.length;
+        let html = `<div class="mapped-summary">`;
+        html += `<span class="badge success">${populatedCount} mapped</span>`;
+        if (unmappedCount > 0) html += `<span class="badge danger">${unmappedCount} unmapped</span>`;
+        html += `</div>`;
 
-            // Order by schema order
-            const schemaKeys = Object.keys(schema.items);
-            groups[key].sort((a, b) => {
-                const ai = schemaKeys.indexOf(a.field);
-                const bi = schemaKeys.indexOf(b.field);
-                return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+        stmtOrder.forEach(stmtKey => {
+            const schema = SCHEMA_MAP[stmtKey];
+            const schemaItems = Object.entries(schema.items);
+            const filledCount = schemaItems.filter(([f]) => index[`${stmtKey}||${f}`]).length;
+
+            html += `<div class="stmt-group"><h4 class="stmt-group-title"><i class="fas ${schema.icon}"></i> ${schema.name} <span class="stmt-count">(${filledCount}/${schemaItems.length} populated)</span></h4>`;
+            html += `<table class="datapoint-table schema-table"><thead><tr><th>Line Item</th><th>Category</th><th>Value</th><th>Period</th><th>Source</th></tr></thead><tbody>`;
+
+            schemaItems.forEach(([field, category]) => {
+                const key = `${stmtKey}||${field}`;
+                const dps = index[key];
+                if (dps && dps.length > 0) {
+                    dps.forEach(dp => {
+                        html += `<tr class="schema-row-filled">`;
+                        html += `<td><strong>${escapeHtml(field)}</strong></td>`;
+                        html += `<td><span class="category-badge">${escapeHtml(category)}</span></td>`;
+                        html += `<td class="datapoint-value">${escapeHtml(String(dp.value ?? ''))}</td>`;
+                        html += `<td>${escapeHtml(dp.period || '—')}</td>`;
+                        html += `<td class="text-muted" style="font-size:11px;">${escapeHtml(dp.source_label || '—')}</td>`;
+                        html += `</tr>`;
+                    });
+                } else {
+                    html += `<tr class="schema-row-empty">`;
+                    html += `<td class="text-muted">${escapeHtml(field)}</td>`;
+                    html += `<td><span class="category-badge">${escapeHtml(category)}</span></td>`;
+                    html += `<td class="text-muted">—</td>`;
+                    html += `<td class="text-muted">—</td>`;
+                    html += `<td class="text-muted">—</td>`;
+                    html += `</tr>`;
+                }
             });
 
-            groups[key].forEach(dp => {
-                html += `<tr>`;
-                html += `<td><strong>${escapeHtml(dp.field)}</strong></td>`;
-                html += `<td><span class="category-badge">${escapeHtml(dp.category)}</span></td>`;
-                html += `<td class="datapoint-value">${escapeHtml(String(dp.value ?? ''))}</td>`;
-                html += `<td>${escapeHtml(dp.period || '—')}</td>`;
-                html += `<td class="text-muted" style="font-size:11px;">${escapeHtml(dp.source_label || '—')}</td>`;
-                html += `</tr>`;
-            });
             html += `</tbody></table></div>`;
         });
         return html;
     }
 
-    /** Render unmapped datapoints */
-    function renderUnmappedDatapoints(unmapped) {
-        let html = `<div class="mapped-summary"><span class="badge danger">${unmapped.length} unmapped</span> <span class="text-muted" style="font-size:12px;">These items could not be matched to the financial statement schema at ≥85% confidence.</span></div>`;
-        html += `<table class="datapoint-table"><thead><tr><th>Original Label</th><th>Value</th><th>Period</th><th>Confidence</th></tr></thead><tbody>`;
-        unmapped.forEach(dp => {
-            const label = dp.field || dp.label || dp.source_label || '—';
-            const cc = (dp.confidence || 0) >= 90 ? 'confidence-high' : (dp.confidence || 0) >= 70 ? 'confidence-medium' : 'confidence-low';
-            html += `<tr class="unmapped-row">`;
-            html += `<td>${escapeHtml(label)}</td>`;
-            html += `<td class="datapoint-value">${escapeHtml(String(dp.value ?? ''))}</td>`;
-            html += `<td>${escapeHtml(dp.period || '—')}</td>`;
-            html += `<td><span class="datapoint-confidence ${cc}">${dp.confidence != null ? dp.confidence + '%' : '—'}</span></td>`;
-            html += `</tr>`;
+    /** Build dropdown options for all schema fields, grouped by statement */
+    function buildSchemaDropdownOptions() {
+        let opts = '<option value="">— Select target field —</option>';
+        ['IS', 'BS', 'CF'].forEach(stmtKey => {
+            const schema = SCHEMA_MAP[stmtKey];
+            opts += `<optgroup label="${schema.name}">`;
+            Object.keys(schema.items).forEach(field => {
+                opts += `<option value="${stmtKey}||${field}">${field}</option>`;
+            });
+            opts += `</optgroup>`;
         });
-        html += `</tbody></table>`;
+        return opts;
+    }
+
+    /** Render unmapped datapoints as expandable items with remap dropdowns */
+    function renderUnmappedDatapoints(unmapped) {
+        if (unmapped.length === 0) {
+            return '<div class="empty-state small"><i class="fas fa-check-circle" style="color:var(--color-brand)"></i><p>All datapoints mapped successfully!</p></div>';
+        }
+
+        const dropdownOpts = buildSchemaDropdownOptions();
+        let html = `<div class="mapped-summary"><span class="badge danger">${unmapped.length} unmapped</span> <span class="text-muted" style="font-size:12px;">Select a target field to remap each item.</span></div>`;
+
+        unmapped.forEach((dp, idx) => {
+            const label = dp.field || dp.label || dp.source_label || `Datapoint ${idx + 1}`;
+            const value = String(dp.value ?? '—');
+            const period = dp.period || '—';
+
+            html += `<div class="unmapped-item">`;
+            html += `<div class="unmapped-item-header">`;
+            html += `<div class="unmapped-item-label"><span class="unmapped-num">${idx + 1}</span> <strong>${escapeHtml(label)}</strong></div>`;
+            html += `<div class="unmapped-item-value">${escapeHtml(value)}</div>`;
+            html += `</div>`;
+            html += `<div class="unmapped-item-body">`;
+            html += `<span class="text-muted" style="font-size:11px;">Period: ${escapeHtml(period)}</span>`;
+            html += `<select class="form-control unmapped-remap-select" data-idx="${idx}">${dropdownOpts}</select>`;
+            html += `</div>`;
+            html += `</div>`;
+        });
         return html;
     }
 

@@ -547,5 +547,20 @@ select.form-control { cursor: pointer; }
 .stmt-count { font-weight: 400; font-size: 12px; color: var(--text-tertiary); }
 .unmapped-row { background: #fff3cd; }
 [data-theme="dark"] .unmapped-row { background: #4a3c1a; }
-.mapped-summary { margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.mapped-summary { margin-bottom: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .category-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--bg-secondary); color: var(--text-secondary); white-space: nowrap; }
+
+/* ── Schema preset table ── */
+.schema-table tr.schema-row-filled td { background: rgba(0,176,80,0.06); }
+[data-theme="dark"] .schema-table tr.schema-row-filled td { background: rgba(0,176,80,0.1); }
+.schema-table tr.schema-row-empty td { opacity: 0.5; }
+
+/* ── Unmapped items with remap dropdown ── */
+.unmapped-item { border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; margin-bottom: 10px; background: var(--bg-primary); }
+.unmapped-item-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.unmapped-item-label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.unmapped-num { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: #f0cc69; color: #333; font-size: 11px; font-weight: 700; flex-shrink: 0; }
+.unmapped-item-value { font-weight: 700; color: var(--color-brand); font-size: 14px; }
+.unmapped-item-body { display: flex; align-items: center; gap: 12px; }
+.unmapped-item-body .form-control { flex: 1; font-size: 12px; padding: 6px 8px; }
+.unmapped-remap-select { max-width: 300px; }
