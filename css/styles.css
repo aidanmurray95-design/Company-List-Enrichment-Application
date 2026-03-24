@@ -541,8 +541,11 @@ select.form-control { cursor: pointer; }
 .btn-delete-extraction:hover, .btn-delete-export:hover { color: #c0392b; background: rgba(192,57,43,0.1); }
 
 /* ── Structured datapoints view ── */
-.stmt-group { margin-bottom: 16px; }
-.stmt-group-title { font-size: 14px; font-weight: 700; color: var(--color-brand); margin: 0 0 8px 0; padding: 6px 10px; background: var(--bg-secondary); border-radius: 6px; display: flex; align-items: center; gap: 8px; }
+.stmt-group { margin-bottom: 20px; }
+.stmt-group-title { font-size: 14px; font-weight: 700; color: var(--color-brand); margin: 0 0 8px 0; padding: 8px 12px; background: var(--bg-secondary); border-radius: 6px; display: flex; align-items: center; gap: 8px; }
 .stmt-group-title i { opacity: 0.7; }
+.stmt-count { font-weight: 400; font-size: 12px; color: var(--text-tertiary); }
 .unmapped-row { background: #fff3cd; }
 [data-theme="dark"] .unmapped-row { background: #4a3c1a; }
+.mapped-summary { margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.category-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--bg-secondary); color: var(--text-secondary); white-space: nowrap; }

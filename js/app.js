@@ -489,13 +489,32 @@
                     bs.innerHTML = '<i class="fas fa-sync-alt"></i> Check Call Status';
                 });
                 break;
-            case 'datapoints':
+            case 'mapped': {
                 if (!ext.datapoints || ext.datapoints.length === 0) {
                     container.innerHTML = '<div class="empty-state small"><i class="fas fa-table"></i><p>No datapoints extracted</p></div>';
                     return;
                 }
-                container.innerHTML = renderStructuredDatapoints(ext.datapoints);
+                const { mapped } = classifyDatapoints(ext.datapoints);
+                if (mapped.length === 0) {
+                    container.innerHTML = '<div class="empty-state small"><i class="fas fa-check-circle"></i><p>No mapped datapoints — check the Unmapped tab</p></div>';
+                    return;
+                }
+                container.innerHTML = renderMappedDatapoints(mapped);
                 break;
+            }
+            case 'unmapped': {
+                if (!ext.datapoints || ext.datapoints.length === 0) {
+                    container.innerHTML = '<div class="empty-state small"><i class="fas fa-table"></i><p>No datapoints extracted</p></div>';
+                    return;
+                }
+                const { unmapped } = classifyDatapoints(ext.datapoints);
+                if (unmapped.length === 0) {
+                    container.innerHTML = '<div class="empty-state small"><i class="fas fa-check-circle" style="color:var(--color-brand)"></i><p>All datapoints mapped successfully!</p></div>';
+                    return;
+                }
+                container.innerHTML = renderUnmappedDatapoints(unmapped);
+                break;
+            }
             case 'raw':
                 // Show the raw API output if available, otherwise show the full extraction record
                 const rawData = ext.rawOutput != null ? ext.rawOutput : ext;
@@ -1516,49 +1535,231 @@
         return Number((sum / datapoints.length).toFixed(1));
     }
 
+    // ============================================
+    // FINANCIAL STATEMENT MAPPING ENGINE
+    // ============================================
+
+    /** Canonical line items per statement */
+    const SCHEMA_MAP = {
+        BS: {
+            name: 'Balance Sheet',
+            icon: 'fa-balance-scale',
+            items: {
+                'Cash & Equivalents': 'Current Assets',
+                'Accounts Receivable': 'Current Assets',
+                'Inventory': 'Current Assets',
+                'Other Current Assets': 'Current Assets',
+                'PP&E (Net)': 'Non-Current Assets',
+                'Intangibles & Goodwill': 'Non-Current Assets',
+                'Other Non-Current Assets': 'Non-Current Assets',
+                'Total Assets': '—',
+                'Accounts Payable': 'Current Liabilities',
+                'Accrued Expenses': 'Current Liabilities',
+                'Short-Term Debt': 'Current Liabilities',
+                'Other Current Liabilities': 'Current Liabilities',
+                'Long-Term Debt': 'Non-Current Liabilities',
+                'Other Non-Current Liabilities': 'Non-Current Liabilities',
+                'Total Liabilities': '—',
+                "Owner's Equity / Retained Earnings": 'Equity',
+                'Total Liabilities & Equity': '—'
+            }
+        },
+        IS: {
+            name: 'Income Statement',
+            icon: 'fa-chart-line',
+            items: {
+                'Revenue': 'Top Line',
+                'COGS': 'Direct Costs',
+                'Gross Profit': '—',
+                'SG&A': 'Operating Expenses',
+                'D&A': 'Operating Expenses',
+                'Other Operating Expenses': 'Operating Expenses',
+                'Operating Income (EBIT)': '—',
+                'Interest Expense': 'Below the Line',
+                'Other Income / (Expense)': 'Below the Line',
+                'Pre-Tax Income': '—',
+                'Tax Expense': 'Tax',
+                'Net Income': 'Bottom Line'
+            }
+        },
+        CF: {
+            name: 'Cash Flow Statement',
+            icon: 'fa-money-bill-wave',
+            items: {
+                'Net Income': 'Operating',
+                'D&A Add-Back': 'Operating',
+                'Changes in Working Capital': 'Operating',
+                'Cash from Operations (CFO)': '—',
+                'CapEx': 'Investing',
+                'Acquisitions / Divestitures': 'Investing',
+                'Cash from Investing (CFI)': '—',
+                'Debt Issuance / Repayment': 'Financing',
+                'Equity Issuance / Distributions': 'Financing',
+                'Cash from Financing (CFF)': '—',
+                'Net Change in Cash': '—'
+            }
+        }
+    };
+
+    /** Fuzzy matching keywords → canonical line item + statement */
+    const LABEL_ALIASES = [
+        { patterns: ['cash', 'liquidity', 'cash & short-term', 'cash equiv'], field: 'Cash & Equivalents', stmt: 'BS' },
+        { patterns: ['trade receivable', 'net receivable', 'a/r', 'accounts receivable', 'ar'], field: 'Accounts Receivable', stmt: 'BS' },
+        { patterns: ['inventory', 'finished goods', 'raw material', 'wip', 'stock'], field: 'Inventory', stmt: 'BS' },
+        { patterns: ['prepaid', 'deposit', 'other current asset', 'other ca'], field: 'Other Current Assets', stmt: 'BS' },
+        { patterns: ['pp&e', 'ppe', 'fixed asset', 'tangible asset', 'property plant', 'net ppe'], field: 'PP&E (Net)', stmt: 'BS' },
+        { patterns: ['goodwill', 'intangible', 'customer relationship', 'ip', 'patent'], field: 'Intangibles & Goodwill', stmt: 'BS' },
+        { patterns: ['total asset'], field: 'Total Assets', stmt: 'BS' },
+        { patterns: ['trade payable', 'a/p', 'accounts payable', 'ap'], field: 'Accounts Payable', stmt: 'BS' },
+        { patterns: ['accrued', 'accrual', 'accrued comp', 'accrued liabilit'], field: 'Accrued Expenses', stmt: 'BS' },
+        { patterns: ['revolver', 'current portion ltd', 'line of credit', 'short-term debt', 'short term debt'], field: 'Short-Term Debt', stmt: 'BS' },
+        { patterns: ['term loan', 'senior secured', 'notes payable', 'bond', 'long-term debt', 'long term debt', 'ltd'], field: 'Long-Term Debt', stmt: 'BS' },
+        { patterns: ['total liabilit'], field: 'Total Liabilities', stmt: 'BS' },
+        { patterns: ['member equity', 'partner capital', 'retained earning', 'shareholder equity', 'owner equity', 'stockholder equity', 'total equity'], field: "Owner's Equity / Retained Earnings", stmt: 'BS' },
+        { patterns: ['total liabilities & equity', 'total liabilities and equity', 'total l&e', 'total l & e'], field: 'Total Liabilities & Equity', stmt: 'BS' },
+        { patterns: ['net sales', 'total revenue', 'gross revenue', 'revenue', 'net revenue', 'sales'], field: 'Revenue', stmt: 'IS' },
+        { patterns: ['cost of sales', 'cost of revenue', 'cost of goods', 'cogs', 'direct cost'], field: 'COGS', stmt: 'IS' },
+        { patterns: ['gross profit', 'gross margin'], field: 'Gross Profit', stmt: 'IS' },
+        { patterns: ['sg&a', 'sga', 'selling expense', 'g&a', 'general & admin', 'overhead', 'opex', 'operating expense'], field: 'SG&A', stmt: 'IS' },
+        { patterns: ['depreciation', 'amortization', 'd&a', 'da'], field: 'D&A', stmt: 'IS' },
+        { patterns: ['operating income', 'ebit', 'income from operation'], field: 'Operating Income (EBIT)', stmt: 'IS' },
+        { patterns: ['interest expense', 'interest cost', 'debt service'], field: 'Interest Expense', stmt: 'IS' },
+        { patterns: ['other income', 'other expense', 'non-operating'], field: 'Other Income / (Expense)', stmt: 'IS' },
+        { patterns: ['pre-tax', 'pretax', 'income before tax', 'ebt'], field: 'Pre-Tax Income', stmt: 'IS' },
+        { patterns: ['income tax', 'tax expense', 'provision for tax'], field: 'Tax Expense', stmt: 'IS' },
+        { patterns: ['net income', 'net profit', 'net earning', 'bottom line'], field: 'Net Income', stmt: 'IS' },
+        { patterns: ['ebitda'], field: 'EBITDA', stmt: 'IS' },
+        { patterns: ['earnings per share', 'eps'], field: 'EPS', stmt: 'IS' },
+        { patterns: ['d&a add-back', 'depreciation add', 'amortization add'], field: 'D&A Add-Back', stmt: 'CF' },
+        { patterns: ['working capital', 'change in a/r', 'change in inventory', 'change in a/p', 'delta'], field: 'Changes in Working Capital', stmt: 'CF' },
+        { patterns: ['cash from operation', 'cfo', 'operating cash'], field: 'Cash from Operations (CFO)', stmt: 'CF' },
+        { patterns: ['capex', 'capital expenditure', 'purchase of pp&e', 'purchases of ppe'], field: 'CapEx', stmt: 'CF' },
+        { patterns: ['acquisition', 'divestiture'], field: 'Acquisitions / Divestitures', stmt: 'CF' },
+        { patterns: ['cash from invest', 'cfi', 'investing cash'], field: 'Cash from Investing (CFI)', stmt: 'CF' },
+        { patterns: ['debt issuance', 'debt repayment', 'borrowing', 'debt proceed', 'repayment'], field: 'Debt Issuance / Repayment', stmt: 'CF' },
+        { patterns: ['dividend', 'distribution', 'buyback', 'equity issuance'], field: 'Equity Issuance / Distributions', stmt: 'CF' },
+        { patterns: ['cash from financing', 'cff', 'financing cash'], field: 'Cash from Financing (CFF)', stmt: 'CF' },
+        { patterns: ['net change in cash', 'change in cash', 'ending cash'], field: 'Net Change in Cash', stmt: 'CF' }
+    ];
+
     /**
-     * Render datapoints grouped by financial statement (BS/IS/CF/UNMAPPED)
+     * Attempt to map a datapoint label to a canonical line item.
+     * Returns { field, statement, category } or null if no match.
      */
-    function renderStructuredDatapoints(datapoints) {
-        const stmtOrder = ['IS', 'BS', 'CF'];
-        const stmtNames = { IS: 'Income Statement', BS: 'Balance Sheet', CF: 'Cash Flow Statement' };
-        const groups = {};
+    function fuzzyMapDatapoint(dp) {
+        // If the LLM already tagged it with statement + field, validate it
+        const dpField = (dp.field || dp.label || '').trim();
+        const dpStmt = (dp.statement || '').toUpperCase();
+
+        if (dpStmt && SCHEMA_MAP[dpStmt]) {
+            const schemaItems = SCHEMA_MAP[dpStmt].items;
+            // Direct match against schema
+            for (const [canonical, category] of Object.entries(schemaItems)) {
+                if (canonical.toLowerCase() === dpField.toLowerCase()) {
+                    return { field: canonical, statement: dpStmt, category };
+                }
+            }
+        }
+
+        // Fuzzy match against alias table
+        const normalized = dpField.toLowerCase().replace(/[^a-z0-9\s\/&()-]/g, '').trim();
+        if (!normalized) return null;
+
+        for (const alias of LABEL_ALIASES) {
+            for (const pattern of alias.patterns) {
+                if (normalized.includes(pattern) || pattern.includes(normalized)) {
+                    const category = SCHEMA_MAP[alias.stmt]?.items?.[alias.field] || '—';
+                    return { field: alias.field, statement: alias.stmt, category };
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Classify datapoints into mapped and unmapped buckets.
+     * Attempts fuzzy mapping for each datapoint.
+     */
+    function classifyDatapoints(datapoints) {
+        const mapped = [];
+        const unmapped = [];
 
         datapoints.forEach(dp => {
-            const stmt = (dp.statement || '').toUpperCase();
-            const key = stmtOrder.includes(stmt) ? stmt : 'OTHER';
+            const match = fuzzyMapDatapoint(dp);
+            if (match) {
+                mapped.push({
+                    ...dp,
+                    field: match.field,
+                    statement: match.statement,
+                    category: match.category,
+                    source_label: dp.source_label || dp.label || dp.field || ''
+                });
+            } else {
+                unmapped.push({
+                    ...dp,
+                    source_label: dp.source_label || dp.label || dp.field || ''
+                });
+            }
+        });
+
+        return { mapped, unmapped };
+    }
+
+    /** Render mapped datapoints grouped by financial statement */
+    function renderMappedDatapoints(mapped) {
+        const stmtOrder = ['IS', 'BS', 'CF'];
+        const groups = {};
+        mapped.forEach(dp => {
+            const key = dp.statement || 'OTHER';
             if (!groups[key]) groups[key] = [];
             groups[key].push(dp);
         });
 
-        // If no statement tags exist, show flat table
-        const hasStatements = Object.keys(groups).some(k => k !== 'OTHER');
-        if (!hasStatements) {
-            return `<table class="datapoint-table"><thead><tr><th>Field</th><th>Value</th><th>Confidence</th><th>Page</th></tr></thead><tbody>${datapoints.map(dp => {
-                const cc = (dp.confidence || 0) >= 90 ? 'confidence-high' : (dp.confidence || 0) >= 70 ? 'confidence-medium' : 'confidence-low';
-                return `<tr><td>${escapeHtml(dp.label || dp.field || '')}</td><td class="datapoint-value">${escapeHtml(String(dp.value || ''))}</td><td><span class="datapoint-confidence ${cc}">${dp.confidence || '—'}${dp.confidence ? '%' : ''}</span></td><td>${dp.page || dp.source_label || '—'}</td></tr>`;
-            }).join('')}</tbody></table>`;
-        }
-
-        // Grouped by statement
-        let html = '';
-        [...stmtOrder, 'OTHER'].forEach(key => {
+        let html = `<div class="mapped-summary"><span class="badge success">${mapped.length} mapped</span></div>`;
+        stmtOrder.forEach(key => {
             if (!groups[key] || groups[key].length === 0) return;
-            const title = stmtNames[key] || 'Other / Unmapped';
-            html += `<div class="stmt-group"><h4 class="stmt-group-title"><i class="fas fa-${key === 'IS' ? 'chart-line' : key === 'BS' ? 'balance-scale' : key === 'CF' ? 'money-bill-wave' : 'question-circle'}"></i> ${title}</h4>`;
+            const schema = SCHEMA_MAP[key];
+            html += `<div class="stmt-group"><h4 class="stmt-group-title"><i class="fas ${schema.icon}"></i> ${schema.name} <span class="stmt-count">(${groups[key].length})</span></h4>`;
             html += `<table class="datapoint-table"><thead><tr><th>Line Item</th><th>Category</th><th>Value</th><th>Period</th><th>Source Label</th></tr></thead><tbody>`;
+
+            // Order by schema order
+            const schemaKeys = Object.keys(schema.items);
+            groups[key].sort((a, b) => {
+                const ai = schemaKeys.indexOf(a.field);
+                const bi = schemaKeys.indexOf(b.field);
+                return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+            });
+
             groups[key].forEach(dp => {
-                const isUnmapped = (dp.field || dp.label || '').toUpperCase().includes('UNMAPPED');
-                html += `<tr${isUnmapped ? ' class="unmapped-row"' : ''}>`;
-                html += `<td>${escapeHtml(dp.field || dp.label || '')}</td>`;
-                html += `<td>${escapeHtml(dp.category || '—')}</td>`;
+                html += `<tr>`;
+                html += `<td><strong>${escapeHtml(dp.field)}</strong></td>`;
+                html += `<td><span class="category-badge">${escapeHtml(dp.category)}</span></td>`;
                 html += `<td class="datapoint-value">${escapeHtml(String(dp.value ?? ''))}</td>`;
                 html += `<td>${escapeHtml(dp.period || '—')}</td>`;
-                html += `<td class="text-muted">${escapeHtml(dp.source_label || dp.label || '—')}</td>`;
+                html += `<td class="text-muted" style="font-size:11px;">${escapeHtml(dp.source_label || '—')}</td>`;
                 html += `</tr>`;
             });
             html += `</tbody></table></div>`;
         });
+        return html;
+    }
+
+    /** Render unmapped datapoints */
+    function renderUnmappedDatapoints(unmapped) {
+        let html = `<div class="mapped-summary"><span class="badge danger">${unmapped.length} unmapped</span> <span class="text-muted" style="font-size:12px;">These items could not be matched to the financial statement schema at ≥85% confidence.</span></div>`;
+        html += `<table class="datapoint-table"><thead><tr><th>Original Label</th><th>Value</th><th>Period</th><th>Confidence</th></tr></thead><tbody>`;
+        unmapped.forEach(dp => {
+            const label = dp.field || dp.label || dp.source_label || '—';
+            const cc = (dp.confidence || 0) >= 90 ? 'confidence-high' : (dp.confidence || 0) >= 70 ? 'confidence-medium' : 'confidence-low';
+            html += `<tr class="unmapped-row">`;
+            html += `<td>${escapeHtml(label)}</td>`;
+            html += `<td class="datapoint-value">${escapeHtml(String(dp.value ?? ''))}</td>`;
+            html += `<td>${escapeHtml(dp.period || '—')}</td>`;
+            html += `<td><span class="datapoint-confidence ${cc}">${dp.confidence != null ? dp.confidence + '%' : '—'}</span></td>`;
+            html += `</tr>`;
+        });
+        html += `</tbody></table>`;
         return html;
     }
 
