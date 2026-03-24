@@ -1455,35 +1455,35 @@
 
     /**
      * Parse real extraction output from the API into datapoints.
-     * Handles various output formats: object with fields, array of items,
-     * string (bot response text), or nested structures.
+     * Handles: markdown-fenced JSON, raw JSON array/object, plain text.
      * Returns { datapoints: [...], confidence: number }
      */
     function parseExtractionOutput(output) {
         const empty = { datapoints: [], confidence: 0 };
         if (output == null) return empty;
 
-        // If output is a string, try to parse as JSON first
         let data = output;
+
+        // If string, try to extract JSON from markdown fences or parse directly
         if (typeof data === 'string') {
-            try { data = JSON.parse(data); } catch (e) {
-                // Plain text response (e.g. bot reply) — return as single datapoint
+            data = extractJsonFromString(data);
+            if (data === null) {
+                // Could not parse any JSON — treat entire string as a single text response
                 return {
-                    datapoints: [{ label: 'Response', value: data, confidence: 100, page: null }],
+                    datapoints: [{ label: 'Response', value: output, confidence: 100, page: null }],
                     confidence: 100
                 };
             }
         }
 
-        // If it's an array, treat each element as a datapoint
+        // If it's an array, each element is a datapoint
         if (Array.isArray(data)) {
             const dps = data.map((item, i) => normalizeDatapoint(item, i));
             return { datapoints: dps, confidence: avgConfidence(dps) };
         }
 
-        // If it's an object, look for common wrapper patterns
+        // If it's an object, look for nested arrays
         if (typeof data === 'object') {
-            // Check for nested arrays: data.results, data.datapoints, data.fields, data.items, data.extractions
             const arrayField = data.results || data.datapoints || data.fields || data.items
                 || data.extractions || data.data || data.extracted_data || data.records;
             if (Array.isArray(arrayField)) {
@@ -1491,16 +1491,21 @@
                 return { datapoints: dps, confidence: avgConfidence(dps) };
             }
 
-            // Check if output has a text/message field (bot-style response)
+            // Text/message field
             if (data.message || data.text || data.answer || data.response) {
                 const text = data.message || data.text || data.answer || data.response;
+                const inner = extractJsonFromString(String(text));
+                if (inner && Array.isArray(inner)) {
+                    const dps = inner.map((item, i) => normalizeDatapoint(item, i));
+                    return { datapoints: dps, confidence: avgConfidence(dps) };
+                }
                 return {
                     datapoints: [{ label: 'Response', value: String(text), confidence: 100, page: null }],
                     confidence: 100
                 };
             }
 
-            // Treat each key-value pair as a datapoint
+            // Key-value pairs as datapoints
             const entries = Object.entries(data).filter(([k]) =>
                 !['status', 'id', 'call_id', 'user_id', 'metadata', 'error', 'quota'].includes(k)
             );
@@ -1516,6 +1521,41 @@
         }
 
         return empty;
+    }
+
+    /**
+     * Extract JSON from a string that may contain markdown fences,
+     * prose before/after the JSON, or raw JSON.
+     * Returns parsed data or null.
+     */
+    function extractJsonFromString(str) {
+        if (!str || typeof str !== 'string') return null;
+
+        // Try 1: Extract from ```json ... ``` or ``` ... ``` fences
+        const fenceMatch = str.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (fenceMatch) {
+            try { return JSON.parse(fenceMatch[1].trim()); } catch (e) { /* fall through */ }
+        }
+
+        // Try 2: Find the first [ ... ] or { ... } in the string
+        const firstBracket = str.search(/[\[{]/);
+        if (firstBracket !== -1) {
+            const substr = str.substring(firstBracket);
+            // Find matching closing bracket
+            const open = substr[0];
+            const close = open === '[' ? ']' : '}';
+            let depth = 0;
+            for (let i = 0; i < substr.length; i++) {
+                if (substr[i] === open) depth++;
+                else if (substr[i] === close) depth--;
+                if (depth === 0) {
+                    try { return JSON.parse(substr.substring(0, i + 1)); } catch (e) { break; }
+                }
+            }
+        }
+
+        // Try 3: Direct parse
+        try { return JSON.parse(str); } catch (e) { return null; }
     }
 
     /** Normalize a single datapoint from various API formats */
@@ -1792,42 +1832,75 @@
     }
 
     /**
+     * Match a single label against all schema line items directly (exact after normalization).
+     * Checks every statement's items. Returns { field, stmt, score:100 } or null.
+     */
+    function directSchemaMatch(label) {
+        const norm = normalizeLabel(label);
+        if (!norm) return null;
+        for (const [stmtKey, schema] of Object.entries(SCHEMA_MAP)) {
+            for (const canonical of Object.keys(schema.items)) {
+                if (norm === normalizeLabel(canonical)) {
+                    return { field: canonical, stmt: stmtKey, score: 100 };
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
      * Full parsing engine: classify datapoints into mapped/unmapped.
-     * 1. NORMALIZE label
-     * 2. MATCH via fuzzy (≥85% threshold)
-     * 3. Assign or flag UNMAPPED
-     * 4. Validate sign convention
-     * 5. Run cross-statement integrity checks
+     *
+     * Matching priority:
+     *   1. dp.category direct match against schema line item names
+     *   2. dp.field direct match against schema line item names
+     *   3. Fuzzy match dp.field against MAPPING_TABLE (≥85%)
+     *   4. Fuzzy match dp.category against MAPPING_TABLE (≥85%)
+     *   5. UNMAPPED
+     *
+     * If dp.category === "UNMAPPED", skip step 1 (LLM already flagged it).
+     *
+     * Then: normalize sign, run cross-statement validation.
      */
     function classifyDatapoints(datapoints) {
         const mapped = [];
         const unmapped = [];
 
-        datapoints.forEach(dp => {
-            const rawLabel = dp.field || dp.label || dp.source_label || '';
-            const dpStmt = (dp.statement || '').toUpperCase();
+        datapoints.forEach((dp, idx) => {
+            const rawField = dp.field || dp.label || '';
+            const rawCategory = dp.category || '';
+            const rawSource = dp.source_label || dp.label || dp.field || '';
+            const isLlmUnmapped = normalizeLabel(rawCategory) === 'unmapped';
 
-            // Step 1+2: If LLM already tagged it, validate against schema
             let match = null;
-            if (dpStmt && SCHEMA_MAP[dpStmt]) {
-                for (const [canonical] of Object.entries(SCHEMA_MAP[dpStmt].items)) {
-                    if (normalizeLabel(rawLabel) === normalizeLabel(canonical)) {
-                        const category = SCHEMA_MAP[dpStmt].items[canonical];
-                        match = { field: canonical, stmt: dpStmt, score: 100 };
-                        break;
-                    }
-                }
+
+            // Priority 1: Direct match dp.category against schema line item names
+            if (!isLlmUnmapped && rawCategory) {
+                match = directSchemaMatch(rawCategory);
+                if (match) match.via = 'category-direct';
             }
 
-            // Step 2: Fuzzy match against mapping table
-            if (!match) {
-                match = matchLabel(rawLabel);
+            // Priority 2: Direct match dp.field against schema line item names
+            if (!match && rawField) {
+                match = directSchemaMatch(rawField);
+                if (match) match.via = 'field-direct';
             }
 
-            // Step 3: Assign or flag
+            // Priority 3: Fuzzy match dp.field against MAPPING_TABLE
+            if (!match && rawField) {
+                match = matchLabel(rawField);
+                if (match) match.via = 'field-fuzzy';
+            }
+
+            // Priority 4: Fuzzy match dp.category against MAPPING_TABLE
+            if (!match && rawCategory && !isLlmUnmapped) {
+                match = matchLabel(rawCategory);
+                if (match) match.via = 'category-fuzzy';
+            }
+
+            // Assign or flag UNMAPPED
             if (match) {
                 const category = SCHEMA_MAP[match.stmt]?.items?.[match.field] || '—';
-                // Step 4: Normalize sign
                 const normalizedValue = normalizeSign(dp.value, match.stmt, category);
                 mapped.push({
                     ...dp,
@@ -1836,18 +1909,19 @@
                     category,
                     value: normalizedValue,
                     matchScore: match.score,
-                    source_label: dp.source_label || dp.label || dp.field || rawLabel
+                    matchVia: match.via,
+                    source_label: rawSource
                 });
             } else {
-                // Step 4: UNMAPPED
                 unmapped.push({
                     ...dp,
-                    source_label: dp.source_label || dp.label || dp.field || rawLabel
+                    _unmappedIndex: idx + 1,
+                    source_label: rawSource
                 });
             }
         });
 
-        // Step 5+6: Cross-statement validation
+        // Cross-statement validation
         const validationChecks = validateCrossStatement(mapped);
 
         return { mapped, unmapped, validationChecks };
@@ -1941,26 +2015,52 @@
     }
 
     /** Render unmapped datapoints as expandable items with remap dropdowns */
+    /** Keys to exclude from the unmapped field detail display */
+    const UNMAPPED_EXCLUDE_KEYS = ['_unmappedIndex', 'confidence', 'page', 'label'];
+
     function renderUnmappedDatapoints(unmapped) {
         if (unmapped.length === 0) {
             return '<div class="empty-state small"><i class="fas fa-check-circle" style="color:var(--color-brand)"></i><p>All datapoints mapped successfully!</p></div>';
         }
 
         const dropdownOpts = buildSchemaDropdownOptions();
-        let html = `<div class="mapped-summary"><span class="badge danger">${unmapped.length} unmapped</span> <span class="text-muted" style="font-size:12px;">Select a target field to remap each item.</span></div>`;
+        let html = `<div class="mapped-summary"><span class="badge danger">${unmapped.length} unmapped</span> <span class="text-muted" style="font-size:12px;">Each item below is a distinct object from the LLM response. Select a schema field to remap.</span></div>`;
 
         unmapped.forEach((dp, idx) => {
-            const label = dp.field || dp.label || dp.source_label || `Datapoint ${idx + 1}`;
-            const value = String(dp.value ?? '—');
-            const period = dp.period || '—';
+            const fieldNum = dp._unmappedIndex || (idx + 1);
+            const displayLabel = dp.source_label || dp.field || dp.label || `Field ${fieldNum}`;
+            const displayValue = dp.value != null ? String(dp.value) : '—';
 
             html += `<div class="unmapped-item">`;
             html += `<div class="unmapped-item-header">`;
-            html += `<div class="unmapped-item-label"><span class="unmapped-num">${idx + 1}</span> <strong>${escapeHtml(label)}</strong></div>`;
-            html += `<div class="unmapped-item-value">${escapeHtml(value)}</div>`;
+            html += `<div class="unmapped-item-label"><span class="unmapped-num">${fieldNum}</span> <strong>Unmapped Field ${fieldNum}</strong></div>`;
+            html += `<div class="unmapped-item-value">${escapeHtml(displayValue)}</div>`;
             html += `</div>`;
+
+            // Show all properties from this JSON object
+            html += `<div class="unmapped-item-details">`;
+            html += `<table class="unmapped-detail-table">`;
+            const displayKeys = ['field', 'statement', 'category', 'value', 'period', 'source_label'];
+            displayKeys.forEach(key => {
+                const val = dp[key];
+                if (val != null && val !== '') {
+                    const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                    html += `<tr><td class="unmapped-detail-key">${escapeHtml(label)}</td><td>${escapeHtml(String(val))}</td></tr>`;
+                }
+            });
+            // Show any extra keys not in the standard set
+            Object.keys(dp).forEach(key => {
+                if (!displayKeys.includes(key) && !UNMAPPED_EXCLUDE_KEYS.includes(key) && dp[key] != null && dp[key] !== '') {
+                    const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                    html += `<tr><td class="unmapped-detail-key">${escapeHtml(label)}</td><td>${escapeHtml(String(dp[key]))}</td></tr>`;
+                }
+            });
+            html += `</table>`;
+            html += `</div>`;
+
+            // Remap dropdown
             html += `<div class="unmapped-item-body">`;
-            html += `<span class="text-muted" style="font-size:11px;">Period: ${escapeHtml(period)}</span>`;
+            html += `<span class="text-muted" style="font-size:12px;">Map to:</span>`;
             html += `<select class="form-control unmapped-remap-select" data-idx="${idx}">${dropdownOpts}</select>`;
             html += `</div>`;
             html += `</div>`;

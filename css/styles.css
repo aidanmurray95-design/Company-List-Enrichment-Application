@@ -564,6 +564,10 @@ select.form-control { cursor: pointer; }
 .unmapped-item-body { display: flex; align-items: center; gap: 12px; }
 .unmapped-item-body .form-control { flex: 1; font-size: 12px; padding: 6px 8px; }
 .unmapped-remap-select { max-width: 300px; }
+.unmapped-item-details { margin-bottom: 8px; }
+.unmapped-detail-table { width: 100%; font-size: 12px; border-collapse: collapse; }
+.unmapped-detail-table td { padding: 3px 8px; border-bottom: 1px solid var(--border-color); }
+.unmapped-detail-key { font-weight: 600; color: var(--text-secondary); width: 120px; white-space: nowrap; }
 
 /* ── Validation checks ── */
 .validation-checks { display: flex; flex-direction: column; gap: 6px; }
