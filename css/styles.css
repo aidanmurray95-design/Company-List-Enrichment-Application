@@ -534,3 +534,15 @@ select.form-control { cursor: pointer; }
     .config-actions .btn { width: 100%; justify-content: center; }
     .explorer-tabs { flex-wrap: wrap; }
 }
+
+/* ── Extraction card actions (delete button) ── */
+.extraction-card-actions { display: flex; align-items: center; gap: 8px; }
+.btn-delete-extraction, .btn-delete-export { color: var(--text-tertiary); cursor: pointer; padding: 4px; border: none; background: none; border-radius: 4px; transition: color 0.15s, background 0.15s; }
+.btn-delete-extraction:hover, .btn-delete-export:hover { color: #c0392b; background: rgba(192,57,43,0.1); }
+
+/* ── Structured datapoints view ── */
+.stmt-group { margin-bottom: 16px; }
+.stmt-group-title { font-size: 14px; font-weight: 700; color: var(--color-brand); margin: 0 0 8px 0; padding: 6px 10px; background: var(--bg-secondary); border-radius: 6px; display: flex; align-items: center; gap: 8px; }
+.stmt-group-title i { opacity: 0.7; }
+.unmapped-row { background: #fff3cd; }
+[data-theme="dark"] .unmapped-row { background: #4a3c1a; }

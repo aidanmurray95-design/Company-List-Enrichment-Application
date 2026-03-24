@@ -230,10 +230,18 @@
                 addPollLogEntry('fa-check-circle', `Text extracted (${fileText.length} chars). Sending LLM request...`, 'poll-success');
 
                 // ── Step 2: POST /functions/llm with text in prompt ──
+                const customInstructions = $('#customPromptInput')?.value?.trim() || '';
                 const prompt = `Analyze and extract all financial metrics from the following ${formatDocType(docType)}.` +
                     (entity ? ` Entity: ${entity}.` : '') +
                     (period ? ` Period: ${period}.` : '') +
-                    ` Return as structured JSON with field names, values, and periods where applicable.\n\n--- Document Content ---\n${fileText}`;
+                    ` Map each extracted value to the appropriate financial statement line item using these categories:\n` +
+                    `Balance Sheet: Cash & Equivalents, Accounts Receivable, Inventory, Other Current Assets, PP&E (Net), Intangibles & Goodwill, Other Non-Current Assets, Total Assets, Accounts Payable, Accrued Expenses, Short-Term Debt, Other Current Liabilities, Long-Term Debt, Other Non-Current Liabilities, Total Liabilities, Owner's Equity / Retained Earnings, Total Liabilities & Equity.\n` +
+                    `Income Statement: Revenue, COGS, Gross Profit, SG&A, D&A, Other Operating Expenses, Operating Income (EBIT), Interest Expense, Other Income / (Expense), Pre-Tax Income, Tax Expense, Net Income.\n` +
+                    `Cash Flow: Net Income, D&A Add-Back, Changes in Working Capital, Cash from Operations (CFO), CapEx, Acquisitions / Divestitures, Cash from Investing (CFI), Debt Issuance / Repayment, Equity Issuance / Distributions, Cash from Financing (CFF), Net Change in Cash.\n` +
+                    `Return as a JSON array where each item has: { "field": "<internal line item>", "statement": "BS|IS|CF", "category": "<category>", "value": <number or string>, "period": "<period>", "source_label": "<original label from document>" }.\n` +
+                    `Flag any items that don't map to the above schema as "UNMAPPED".` +
+                    (customInstructions ? `\n\nAdditional instructions: ${customInstructions}` : '') +
+                    `\n\n--- Document Content ---\n${fileText}`;
 
                 const extractResult = await client.sendLLMRequest(prompt, '', {
                     temperature: 0.2,
@@ -430,13 +438,20 @@
             return;
         }
         grid.innerHTML = filtered.map(ext => {
-            const ml = { scan: 'Scan', qna: 'QnA', llm: 'LLM', bot: 'Bot' }[ext.extractionMethod] || 'Scan';
-            return `<div class="extraction-card" data-id="${ext.id}"><div class="extraction-card-header"><h4 title="${ext.fileName}">${ext.fileName}</h4>${getStatusBadge(ext.status)}</div><div class="extraction-meta"><span><i class="fas fa-building"></i> ${ext.entity}</span><span><i class="fas fa-calendar"></i> ${ext.period}</span><span><i class="fas fa-clock"></i> ${getTimeAgo(ext.createdAt)}</span><span><i class="fas fa-cog"></i> ${ml}</span></div><div class="extraction-stats"><div class="extraction-stat"><div class="stat-value">${ext.datapointCount}</div><div class="stat-label">Datapoints</div></div><div class="extraction-stat"><div class="stat-value">${ext.confidence}%</div><div class="stat-label">Confidence</div></div><div class="extraction-stat"><div class="stat-value">${ext.fileType?.toUpperCase()}</div><div class="stat-label">Format</div></div></div></div>`;
+            const ml = { scan: 'Scan', qna: 'QnA', llm: 'LLM', bot: 'Bot' }[ext.extractionMethod] || 'LLM';
+            return `<div class="extraction-card" data-id="${ext.id}"><div class="extraction-card-header"><h4 title="${ext.fileName}">${ext.fileName}</h4><div class="extraction-card-actions">${getStatusBadge(ext.status)}<button class="btn-icon btn-delete-extraction" data-id="${ext.id}" title="Delete extraction"><i class="fas fa-trash-alt"></i></button></div></div><div class="extraction-meta"><span><i class="fas fa-building"></i> ${ext.entity}</span><span><i class="fas fa-calendar"></i> ${ext.period}</span><span><i class="fas fa-clock"></i> ${getTimeAgo(ext.createdAt)}</span><span><i class="fas fa-cog"></i> ${ml}</span></div><div class="extraction-stats"><div class="extraction-stat"><div class="stat-value">${ext.datapointCount}</div><div class="stat-label">Datapoints</div></div><div class="extraction-stat"><div class="stat-value">${ext.confidence}%</div><div class="stat-label">Confidence</div></div><div class="extraction-stat"><div class="stat-value">${ext.fileType?.toUpperCase()}</div><div class="stat-label">Format</div></div></div></div>`;
         }).join('');
         grid.querySelectorAll('.extraction-card').forEach(card => {
-            card.addEventListener('click', () => {
+            card.addEventListener('click', (e) => {
+                if (e.target.closest('.btn-delete-extraction')) return;
                 const ext = state.extractions.find(e => e.id === card.dataset.id);
                 if (ext) openDetailPanel(ext);
+            });
+        });
+        grid.querySelectorAll('.btn-delete-extraction').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (confirm('Delete this extraction?')) deleteExtraction(btn.dataset.id);
             });
         });
     }
@@ -479,7 +494,7 @@
                     container.innerHTML = '<div class="empty-state small"><i class="fas fa-table"></i><p>No datapoints extracted</p></div>';
                     return;
                 }
-                container.innerHTML = `<table class="datapoint-table"><thead><tr><th>Field</th><th>Value</th><th>Confidence</th><th>Page</th></tr></thead><tbody>${ext.datapoints.map(dp => { const cc = dp.confidence >= 90 ? 'confidence-high' : dp.confidence >= 70 ? 'confidence-medium' : 'confidence-low'; return `<tr><td>${dp.label}</td><td class="datapoint-value">${dp.value}</td><td><span class="datapoint-confidence ${cc}">${dp.confidence}%</span></td><td>${dp.page || '—'}</td></tr>`; }).join('')}</tbody></table>`;
+                container.innerHTML = renderStructuredDatapoints(ext.datapoints);
                 break;
             case 'raw':
                 // Show the raw API output if available, otherwise show the full extraction record
@@ -549,15 +564,22 @@
         container.innerHTML = completed.map(ext => {
             const checked = state.selectedExtractions.has(ext.id) ? 'checked' : '';
             const sel = state.selectedExtractions.has(ext.id) ? 'selected' : '';
-            return `<div class="export-selection-item ${sel}" data-id="${ext.id}"><input type="checkbox" ${checked} data-id="${ext.id}"><div><div style="font-weight:600;font-size:12px;">${ext.fileName}</div><div style="font-size:11px;color:var(--text-tertiary);">${ext.entity} · ${ext.period} · ${ext.datapointCount} datapoints</div></div></div>`;
+            return `<div class="export-selection-item ${sel}" data-id="${ext.id}"><input type="checkbox" ${checked} data-id="${ext.id}"><div style="flex:1;"><div style="font-weight:600;font-size:12px;">${ext.fileName}</div><div style="font-size:11px;color:var(--text-tertiary);">${ext.entity} · ${ext.period} · ${ext.datapointCount} datapoints</div></div><button class="btn-icon btn-delete-export" data-id="${ext.id}" title="Delete extraction"><i class="fas fa-trash-alt"></i></button></div>`;
         }).join('');
         container.querySelectorAll('.export-selection-item').forEach(item => {
-            item.addEventListener('click', () => {
+            item.addEventListener('click', (e) => {
+                if (e.target.closest('.btn-delete-export')) return;
                 const id = item.dataset.id;
                 if (state.selectedExtractions.has(id)) state.selectedExtractions.delete(id);
                 else state.selectedExtractions.add(id);
                 renderExportSelections();
                 renderExportPreview();
+            });
+        });
+        container.querySelectorAll('.btn-delete-export').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (confirm('Delete this extraction?')) deleteExtraction(btn.dataset.id);
             });
         });
     }
@@ -1492,6 +1514,65 @@
         if (datapoints.length === 0) return 0;
         const sum = datapoints.reduce((acc, dp) => acc + (dp.confidence || 0), 0);
         return Number((sum / datapoints.length).toFixed(1));
+    }
+
+    /**
+     * Render datapoints grouped by financial statement (BS/IS/CF/UNMAPPED)
+     */
+    function renderStructuredDatapoints(datapoints) {
+        const stmtOrder = ['IS', 'BS', 'CF'];
+        const stmtNames = { IS: 'Income Statement', BS: 'Balance Sheet', CF: 'Cash Flow Statement' };
+        const groups = {};
+
+        datapoints.forEach(dp => {
+            const stmt = (dp.statement || '').toUpperCase();
+            const key = stmtOrder.includes(stmt) ? stmt : 'OTHER';
+            if (!groups[key]) groups[key] = [];
+            groups[key].push(dp);
+        });
+
+        // If no statement tags exist, show flat table
+        const hasStatements = Object.keys(groups).some(k => k !== 'OTHER');
+        if (!hasStatements) {
+            return `<table class="datapoint-table"><thead><tr><th>Field</th><th>Value</th><th>Confidence</th><th>Page</th></tr></thead><tbody>${datapoints.map(dp => {
+                const cc = (dp.confidence || 0) >= 90 ? 'confidence-high' : (dp.confidence || 0) >= 70 ? 'confidence-medium' : 'confidence-low';
+                return `<tr><td>${escapeHtml(dp.label || dp.field || '')}</td><td class="datapoint-value">${escapeHtml(String(dp.value || ''))}</td><td><span class="datapoint-confidence ${cc}">${dp.confidence || '—'}${dp.confidence ? '%' : ''}</span></td><td>${dp.page || dp.source_label || '—'}</td></tr>`;
+            }).join('')}</tbody></table>`;
+        }
+
+        // Grouped by statement
+        let html = '';
+        [...stmtOrder, 'OTHER'].forEach(key => {
+            if (!groups[key] || groups[key].length === 0) return;
+            const title = stmtNames[key] || 'Other / Unmapped';
+            html += `<div class="stmt-group"><h4 class="stmt-group-title"><i class="fas fa-${key === 'IS' ? 'chart-line' : key === 'BS' ? 'balance-scale' : key === 'CF' ? 'money-bill-wave' : 'question-circle'}"></i> ${title}</h4>`;
+            html += `<table class="datapoint-table"><thead><tr><th>Line Item</th><th>Category</th><th>Value</th><th>Period</th><th>Source Label</th></tr></thead><tbody>`;
+            groups[key].forEach(dp => {
+                const isUnmapped = (dp.field || dp.label || '').toUpperCase().includes('UNMAPPED');
+                html += `<tr${isUnmapped ? ' class="unmapped-row"' : ''}>`;
+                html += `<td>${escapeHtml(dp.field || dp.label || '')}</td>`;
+                html += `<td>${escapeHtml(dp.category || '—')}</td>`;
+                html += `<td class="datapoint-value">${escapeHtml(String(dp.value ?? ''))}</td>`;
+                html += `<td>${escapeHtml(dp.period || '—')}</td>`;
+                html += `<td class="text-muted">${escapeHtml(dp.source_label || dp.label || '—')}</td>`;
+                html += `</tr>`;
+            });
+            html += `</tbody></table></div>`;
+        });
+        return html;
+    }
+
+    // ============================================
+    // DELETE EXTRACTIONS
+    // ============================================
+    function deleteExtraction(id) {
+        state.extractions = state.extractions.filter(e => e.id !== id);
+        state.selectedExtractions.delete(id);
+        saveExtractions();
+        renderReviewGrid();
+        renderExportSelections();
+        renderExportPreview();
+        showToast('Extraction deleted', 'info');
     }
 
     // ============================================

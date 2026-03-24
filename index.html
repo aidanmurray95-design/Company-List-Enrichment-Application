@@ -123,6 +123,11 @@
                                 <input type="text" id="reportingPeriod" class="form-control" placeholder="e.g., Q4 2024">
                             </div>
                             <input type="hidden" id="extractionMethod" value="llm">
+                            <div class="form-group">
+                                <label><i class="fas fa-pen-fancy"></i> Custom Instructions (Optional)</label>
+                                <textarea id="customPromptInput" class="form-control" rows="3" placeholder="Add additional instructions for the LLM extraction, e.g.:&#10;&#10;Focus on revenue recognition and EBITDA adjustments. Include any add-backs or one-time items."></textarea>
+                                <span class="form-hint">These instructions will be appended to the extraction prompt sent to the LLM.</span>
+                            </div>
                         </div>
                         <!-- Status Polling Progress (shown during extraction) -->
                         <div class="status-poll-section" id="statusPollSection" style="display:none;">
