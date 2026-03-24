@@ -46,7 +46,7 @@
         initConfigTab();
         initThemeToggle();
         updateConnectionStatus();
-        if (state.extractions.length === 0) seedDemoData();
+        // No demo data — extractions are populated from real API responses
         renderReviewGrid();
         renderExportSelections();
         renderRecentSubmissions();
@@ -295,6 +295,8 @@
                     }
                 }
 
+                let extractionOutput = null;
+
                 if (extractResult && extractResult.ok) {
                     callId = client._extractCallId(extractResult.data);
                     addPollLogEntry('fa-check-circle', `Extraction request accepted. call_id: ${callId || 'none'}`, 'poll-success');
@@ -312,10 +314,15 @@
 
                         if (statusResult && (statusResult.ok || statusResult.data?.output != null)) {
                             const finalStatus = statusResult.data?.status || 'unknown';
-                            const hasOutput = statusResult.data?.output != null;
+                            extractionOutput = statusResult.data?.output;
+                            const hasOutput = extractionOutput != null;
                             addPollLogEntry('fa-flag-checkered', `Extraction final status: ${finalStatus}${hasOutput ? ' (output received)' : ''}`, ['completed', 'complete', 'success', 'done'].includes(finalStatus.toLowerCase()) || hasOutput ? 'poll-success' : 'poll-warning');
                             $('#statusPollBadge').textContent = finalStatus;
                             $('#statusPollBadge').className = 'status-poll-badge ' + (['completed', 'complete', 'success', 'done'].includes(finalStatus.toLowerCase()) || hasOutput ? 'completed' : 'failed');
+
+                            if (hasOutput) {
+                                addPollLogEntry('fa-database', `Extraction output captured for review.`, 'poll-success');
+                            }
                         } else {
                             addPollLogEntry('fa-times-circle', `Extraction polling ended: ${statusResult?.statusText || 'timeout'}`, 'poll-error');
                             $('#statusPollBadge').textContent = 'Timeout';
@@ -328,13 +335,13 @@
                     addPollLogEntry('fa-times-circle', `Extraction failed: ${extractResult?.status} ${extractResult?.statusText}`, 'poll-error');
                 }
 
-                fileItem.status = 'success';
-                addExtractionRecord(fileItem, docId, callId, method);
+                fileItem.status = extractionOutput != null ? 'success' : (callId ? 'processing' : 'error');
+                addExtractionRecord(fileItem, docId, callId, method, extractionOutput);
             } catch (err) {
                 fileItem.status = 'error';
                 addPollLogEntry('fa-times-circle', `Error: ${fileItem.name} — ${err.message}`, 'poll-error');
                 showToast(`Error: ${fileItem.name} — ${err.message}`, 'error');
-                addExtractionRecord(fileItem, generateId(), null, method);
+                addExtractionRecord(fileItem, null, null, method, null);
             }
         }
 
@@ -363,22 +370,24 @@
         showToast('All documents submitted for extraction!', 'success');
     }
 
-    function addExtractionRecord(fileItem, docId, callId, method) {
-        const demoDatapoints = generateDemoDatapoints($('#docTypeSelect').value);
+    function addExtractionRecord(fileItem, docId, callId, method, apiOutput) {
+        const parsed = parseExtractionOutput(apiOutput);
+        const statusMap = { success: 'completed', processing: 'processing', error: 'failed' };
         state.extractions.unshift({
             id: generateId(), documentId: docId, callId, extractionMethod: method,
             fileName: fileItem.name, fileType: fileItem.type, fileSize: fileItem.size,
             docType: $('#docTypeSelect').value,
             entity: $('#entityName').value || 'Unknown Entity',
             period: $('#reportingPeriod').value || 'N/A',
-            status: fileItem.status === 'success' ? 'completed' : 'failed',
-            confidence: (Math.random() * 15 + 85).toFixed(1),
-            datapoints: demoDatapoints,
-            datapointCount: demoDatapoints.length,
+            status: statusMap[fileItem.status] || 'failed',
+            confidence: parsed.confidence,
+            datapoints: parsed.datapoints,
+            datapointCount: parsed.datapoints.length,
+            rawOutput: apiOutput,
             submittedBy: client.name || client.userId || client.email || 'User',
             userId: client.userId,
             createdAt: new Date().toISOString(),
-            completedAt: new Date().toISOString()
+            completedAt: fileItem.status === 'success' ? new Date().toISOString() : null
         });
         localStorage.setItem('bf_extractions', JSON.stringify(state.extractions));
     }
@@ -528,7 +537,9 @@
                 container.innerHTML = `<table class="datapoint-table"><thead><tr><th>Field</th><th>Value</th><th>Confidence</th><th>Page</th></tr></thead><tbody>${ext.datapoints.map(dp => { const cc = dp.confidence >= 90 ? 'confidence-high' : dp.confidence >= 70 ? 'confidence-medium' : 'confidence-low'; return `<tr><td>${dp.label}</td><td class="datapoint-value">${dp.value}</td><td><span class="datapoint-confidence ${cc}">${dp.confidence}%</span></td><td>${dp.page || '—'}</td></tr>`; }).join('')}</tbody></table>`;
                 break;
             case 'raw':
-                container.innerHTML = `<div class="json-display">${JSON.stringify(ext, null, 2)}</div>`;
+                // Show the raw API output if available, otherwise show the full extraction record
+                const rawData = ext.rawOutput != null ? ext.rawOutput : ext;
+                container.innerHTML = `<div class="json-display">${typeof rawData === 'string' ? escapeHtml(rawData) : JSON.stringify(rawData, null, 2)}</div>`;
                 break;
         }
     }
@@ -1448,74 +1459,94 @@
     }
 
     // ============================================
-    // DEMO DATA
+    // DEMO DATA (removed — extractions now use real API output)
     // ============================================
-    function seedDemoData() {
-        const demos = [
-            { id: generateId(), documentId: 'doc-demo-001', callId: 'call-abc-123', extractionMethod: 'scan', fileName: 'AcmeCorp_IncomeStatement_Q4_2024.pdf', fileType: 'pdf', fileSize: 245780, docType: 'income_statement', entity: 'Acme Corporation', period: 'Q4 2024', status: 'completed', confidence: '94.2', datapoints: generateDemoDatapoints('income_statement'), datapointCount: 0, userId: window.BF_GLOBALS.USER_ID || '', createdAt: new Date(Date.now() - 3600000).toISOString(), completedAt: new Date(Date.now() - 3500000).toISOString() },
-            { id: generateId(), documentId: 'doc-demo-002', callId: 'call-def-456', extractionMethod: 'qna', fileName: 'GlobalTech_BalanceSheet_2024.xlsx', fileType: 'xlsx', fileSize: 189450, docType: 'balance_sheet', entity: 'Global Tech Inc.', period: 'FY 2024', status: 'completed', confidence: '91.8', datapoints: generateDemoDatapoints('balance_sheet'), datapointCount: 0, userId: window.BF_GLOBALS.USER_ID || '', createdAt: new Date(Date.now() - 7200000).toISOString(), completedAt: new Date(Date.now() - 7100000).toISOString() },
-            { id: generateId(), documentId: 'doc-demo-003', callId: 'call-ghi-789', extractionMethod: 'bot', fileName: 'BrightFuture_CashFlow_H1_2024.pdf', fileType: 'pdf', fileSize: 312600, docType: 'cash_flow', entity: 'BrightFuture Ltd', period: 'H1 2024', status: 'completed', confidence: '88.5', datapoints: generateDemoDatapoints('cash_flow'), datapointCount: 0, userId: window.BF_GLOBALS.USER_ID || '', createdAt: new Date(Date.now() - 86400000).toISOString(), completedAt: new Date(Date.now() - 86300000).toISOString() }
-        ];
-        demos.forEach(e => { e.datapointCount = e.datapoints.length; });
-        state.extractions = demos;
-        saveExtractions();
+
+    /**
+     * Parse real extraction output from the API into datapoints.
+     * Handles various output formats: object with fields, array of items,
+     * string (bot response text), or nested structures.
+     * Returns { datapoints: [...], confidence: number }
+     */
+    function parseExtractionOutput(output) {
+        const empty = { datapoints: [], confidence: 0 };
+        if (output == null) return empty;
+
+        // If output is a string, try to parse as JSON first
+        let data = output;
+        if (typeof data === 'string') {
+            try { data = JSON.parse(data); } catch (e) {
+                // Plain text response (e.g. bot reply) — return as single datapoint
+                return {
+                    datapoints: [{ label: 'Response', value: data, confidence: 100, page: null }],
+                    confidence: 100
+                };
+            }
+        }
+
+        // If it's an array, treat each element as a datapoint
+        if (Array.isArray(data)) {
+            const dps = data.map((item, i) => normalizeDatapoint(item, i));
+            return { datapoints: dps, confidence: avgConfidence(dps) };
+        }
+
+        // If it's an object, look for common wrapper patterns
+        if (typeof data === 'object') {
+            // Check for nested arrays: data.results, data.datapoints, data.fields, data.items, data.extractions
+            const arrayField = data.results || data.datapoints || data.fields || data.items
+                || data.extractions || data.data || data.extracted_data || data.records;
+            if (Array.isArray(arrayField)) {
+                const dps = arrayField.map((item, i) => normalizeDatapoint(item, i));
+                return { datapoints: dps, confidence: avgConfidence(dps) };
+            }
+
+            // Check if output has a text/message field (bot-style response)
+            if (data.message || data.text || data.answer || data.response) {
+                const text = data.message || data.text || data.answer || data.response;
+                return {
+                    datapoints: [{ label: 'Response', value: String(text), confidence: 100, page: null }],
+                    confidence: 100
+                };
+            }
+
+            // Treat each key-value pair as a datapoint
+            const entries = Object.entries(data).filter(([k]) =>
+                !['status', 'id', 'call_id', 'user_id', 'metadata', 'error', 'quota'].includes(k)
+            );
+            if (entries.length > 0) {
+                const dps = entries.map(([key, val], i) => ({
+                    label: key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+                    value: typeof val === 'object' ? JSON.stringify(val) : String(val),
+                    confidence: 100,
+                    page: null
+                }));
+                return { datapoints: dps, confidence: 100 };
+            }
+        }
+
+        return empty;
     }
 
-    function generateDemoDatapoints(docType) {
-        const t = {
-            income_statement: [
-                { label: 'Total Revenue', value: '$12,450,000', confidence: 97, page: 1 },
-                { label: 'Cost of Goods Sold', value: '$7,230,000', confidence: 95, page: 1 },
-                { label: 'Gross Profit', value: '$5,220,000', confidence: 96, page: 1 },
-                { label: 'Operating Expenses', value: '$2,180,000', confidence: 93, page: 2 },
-                { label: 'EBITDA', value: '$3,040,000', confidence: 94, page: 2 },
-                { label: 'Depreciation & Amortization', value: '$620,000', confidence: 92, page: 2 },
-                { label: 'Operating Income (EBIT)', value: '$2,420,000', confidence: 95, page: 3 },
-                { label: 'Interest Expense', value: '$180,000', confidence: 88, page: 3 },
-                { label: 'Income Before Tax', value: '$2,240,000', confidence: 94, page: 3 },
-                { label: 'Income Tax Expense', value: '$537,600', confidence: 90, page: 3 },
-                { label: 'Net Income', value: '$1,702,400', confidence: 96, page: 3 },
-                { label: 'Earnings Per Share', value: '$3.42', confidence: 97, page: 3 }
-            ],
-            balance_sheet: [
-                { label: 'Cash & Cash Equivalents', value: '$3,240,000', confidence: 96, page: 1 },
-                { label: 'Accounts Receivable', value: '$2,180,000', confidence: 95, page: 1 },
-                { label: 'Inventory', value: '$1,890,000', confidence: 91, page: 1 },
-                { label: 'Total Current Assets', value: '$8,810,000', confidence: 97, page: 1 },
-                { label: 'Property, Plant & Equipment', value: '$5,420,000', confidence: 94, page: 2 },
-                { label: 'Total Assets', value: '$18,330,000', confidence: 96, page: 2 },
-                { label: 'Accounts Payable', value: '$1,450,000', confidence: 95, page: 3 },
-                { label: 'Total Current Liabilities', value: '$3,750,000', confidence: 94, page: 3 },
-                { label: 'Long-term Debt', value: '$4,200,000', confidence: 93, page: 3 },
-                { label: 'Total Liabilities', value: '$8,950,000', confidence: 95, page: 3 },
-                { label: 'Retained Earnings', value: '$8,880,000', confidence: 94, page: 4 },
-                { label: 'Total Equity', value: '$9,380,000', confidence: 96, page: 4 }
-            ],
-            cash_flow: [
-                { label: 'Net Income', value: '$1,702,400', confidence: 96, page: 1 },
-                { label: 'Depreciation & Amortization', value: '$620,000', confidence: 94, page: 1 },
-                { label: 'Change in AR', value: '-$340,000', confidence: 88, page: 1 },
-                { label: 'Cash from Operations', value: '$2,072,400', confidence: 93, page: 1 },
-                { label: 'Capital Expenditures', value: '-$890,000', confidence: 91, page: 2 },
-                { label: 'Cash from Investing', value: '-$2,090,000', confidence: 90, page: 2 },
-                { label: 'Debt Repayment', value: '-$500,000', confidence: 94, page: 2 },
-                { label: 'Dividends Paid', value: '-$250,000', confidence: 95, page: 2 },
-                { label: 'Cash from Financing', value: '-$750,000', confidence: 92, page: 2 },
-                { label: 'Net Change in Cash', value: '-$767,600', confidence: 91, page: 3 },
-                { label: 'Ending Cash Balance', value: '$3,240,000', confidence: 97, page: 3 }
-            ],
-            trial_balance: [
-                { label: 'Cash (1000)', value: '$3,240,000 DR', confidence: 96, page: 1 },
-                { label: 'Accounts Receivable (1100)', value: '$2,180,000 DR', confidence: 94, page: 1 },
-                { label: 'Inventory (1200)', value: '$1,890,000 DR', confidence: 92, page: 1 },
-                { label: 'Accounts Payable (2000)', value: '$1,450,000 CR', confidence: 95, page: 2 },
-                { label: 'Revenue (4000)', value: '$12,450,000 CR', confidence: 96, page: 3 },
-                { label: 'COGS (5000)', value: '$7,230,000 DR', confidence: 93, page: 3 },
-                { label: 'Total Debits', value: '$22,140,000', confidence: 95, page: 4 },
-                { label: 'Total Credits', value: '$22,140,000', confidence: 95, page: 4 }
-            ]
+    /** Normalize a single datapoint from various API formats */
+    function normalizeDatapoint(item, index) {
+        if (typeof item === 'string') {
+            return { label: `Item ${index + 1}`, value: item, confidence: 100, page: null };
+        }
+        if (typeof item !== 'object') {
+            return { label: `Item ${index + 1}`, value: String(item), confidence: 100, page: null };
+        }
+        return {
+            label: item.label || item.field || item.name || item.key || item.metric || `Field ${index + 1}`,
+            value: item.value != null ? String(item.value) : (item.result || item.answer || item.text || '—'),
+            confidence: item.confidence != null ? Number(item.confidence) : (item.score != null ? Math.round(item.score * 100) : 100),
+            page: item.page || item.page_number || item.source_page || null
         };
-        return t[docType] || t.income_statement;
+    }
+
+    function avgConfidence(datapoints) {
+        if (datapoints.length === 0) return 0;
+        const sum = datapoints.reduce((acc, dp) => acc + (dp.confidence || 0), 0);
+        return Number((sum / datapoints.length).toFixed(1));
     }
 
     // ============================================
