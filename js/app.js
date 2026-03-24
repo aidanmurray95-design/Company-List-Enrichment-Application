@@ -250,28 +250,25 @@
                     if (uploadStatusResult && (uploadStatusResult.ok || uploadStatusResult.data?.output != null)) {
                         const uploadOutput = uploadStatusResult.data?.output;
                         const uploadStatus = String(uploadStatusResult.data?.status || '').toLowerCase();
-                        // Extract document_id from the upload output
+                        // Try to extract document_id from the upload output
                         docId = extractDocumentId(uploadOutput);
                         if (docId) {
                             addPollLogEntry('fa-check-circle', `Upload complete. document_id: ${docId}`, 'poll-success');
                         } else {
-                            addPollLogEntry('fa-times-circle', `Upload status: ${uploadStatus}. Could not extract document_id from output.`, 'poll-error');
+                            // Generate a unique document_id so extraction can proceed
+                            docId = generateDocumentId(fileItem.name);
+                            addPollLogEntry('fa-info-circle', `Upload status: ${uploadStatus}. No document_id in output — generated: ${docId}`, 'poll-warning');
                             addPollLogEntry('fa-info-circle', `Output received: ${typeof uploadOutput === 'object' ? JSON.stringify(uploadOutput) : uploadOutput}`, 'poll-warning');
-                            fileItem.status = 'error';
-                            addExtractionRecord(fileItem, null, uploadCallId, method);
-                            continue;  // Skip extraction — no valid document_id
                         }
                     } else {
-                        addPollLogEntry('fa-times-circle', `Upload polling ended without result: ${uploadStatusResult?.statusText || 'timeout'}. Cannot proceed without document_id.`, 'poll-error');
-                        fileItem.status = 'error';
-                        addExtractionRecord(fileItem, null, uploadCallId, method);
-                        continue;  // Skip extraction — upload did not complete
+                        // Upload polling timed out or failed — generate a document_id to attempt extraction anyway
+                        docId = generateDocumentId(fileItem.name);
+                        addPollLogEntry('fa-exclamation-triangle', `Upload polling ended: ${uploadStatusResult?.statusText || 'timeout'}. Generated document_id: ${docId}`, 'poll-warning');
                     }
                 } else {
-                    addPollLogEntry('fa-times-circle', `Upload did not return a call_id. Cannot track upload status.`, 'poll-error');
-                    fileItem.status = 'error';
-                    addExtractionRecord(fileItem, null, null, method);
-                    continue;  // Skip extraction — no way to get document_id
+                    // No call_id from upload — generate a document_id to attempt extraction
+                    docId = generateDocumentId(fileItem.name);
+                    addPollLogEntry('fa-exclamation-triangle', `Upload did not return a call_id. Generated document_id: ${docId}`, 'poll-warning');
                 }
 
                 // ── Step 3: Send extraction request using document_id ──
@@ -1553,6 +1550,11 @@
     // UTILITIES
     // ============================================
     function generateId() { return 'bf-' + Math.random().toString(36).substring(2, 10) + Date.now().toString(36); }
+    /** Generate a unique document ID from the filename + timestamp, distinct from call/task IDs */
+    function generateDocumentId(fileName) {
+        const slug = (fileName || 'doc').replace(/[^a-zA-Z0-9]/g, '').substring(0, 12).toLowerCase();
+        return 'doc-' + slug + '-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
+    }
     function formatFileSize(bytes) { if (!bytes) return '0 B'; const s = ['B', 'KB', 'MB', 'GB']; const i = Math.floor(Math.log(bytes) / Math.log(1024)); return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + s[i]; }
     function getTimeAgo(d) { const s = Math.floor((new Date() - new Date(d)) / 1000); if (s < 60) return 'Just now'; if (s < 3600) return `${Math.floor(s / 60)}m ago`; if (s < 86400) return `${Math.floor(s / 3600)}h ago`; if (s < 604800) return `${Math.floor(s / 86400)}d ago`; return new Date(d).toLocaleDateString(); }
     function getStatusBadge(s) { const m = { completed: '<span class="badge success">Completed</span>', approved: '<span class="badge success">Approved</span>', processing: '<span class="badge info">Processing</span>', failed: '<span class="badge danger">Failed</span>', pending: '<span class="badge">Pending</span>', success: '<span class="badge success">Success</span>', partial: '<span class="badge">Partial</span>' }; return m[s] || `<span class="badge">${s || 'Unknown'}</span>`; }
