@@ -138,11 +138,7 @@
         $('#btnClearQueue').addEventListener('click', () => { state.fileQueue = []; renderFileQueue(); updateSubmitButton(); });
         $('#btnSubmitExtraction').addEventListener('click', submitForExtraction);
 
-        // Show/hide bot prompt section based on extraction method
-        $('#extractionMethod').addEventListener('change', () => {
-            const method = $('#extractionMethod').value;
-            $('#botPromptSection').style.display = method === 'bot' ? 'block' : 'none';
-        });
+        // Extraction method is now always LLM — no method selector needed
     }
 
     function addFilesToQueue(files) {
@@ -196,8 +192,6 @@
         const docType = $('#docTypeSelect').value;
         const entity = $('#entityName').value;
         const period = $('#reportingPeriod').value;
-        const method = $('#extractionMethod').value;
-        const botPrompt = $('#botPromptInput').value.trim();
         const btn = $('#btnSubmitExtraction');
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner"></span> Processing...';
@@ -222,42 +216,37 @@
             const docId = generateDocumentId(fileItem.name);
 
             try {
-                // ── Step 1: Convert file to base64 and send directly with extraction request ──
-                addPollLogEntry('fa-file-export', `Converting ${fileItem.name} to base64...`, '');
-                const base64 = await client._fileToBase64(fileItem.file);
-                const filePayload = {
-                    base64,
-                    name: fileItem.name,
-                    contentType: fileItem.file.type || 'application/octet-stream'
-                };
-                addPollLogEntry('fa-check-circle', `File encoded (${formatFileSize(fileItem.size)}). Sending ${method.toUpperCase()} request...`, 'poll-success');
+                // ── Step 1: Extract text from file client-side ──
+                addPollLogEntry('fa-file-export', `Extracting text from ${fileItem.name}...`, '');
+                let fileText = await client.fileToText(fileItem.file);
 
-                let extractResult;
-                const prompt = botPrompt || `Please extract all financial datapoints from the uploaded ${formatDocType(docType)}.`;
-
-                switch (method) {
-                    case 'scan':
-                        extractResult = await client.sendScanRequest(docId, docType, [], {}, filePayload);
-                        break;
-                    case 'qna':
-                        extractResult = await client.sendQnARequest(`Extract all key financial datapoints from this ${formatDocType(docType)}`, docId, {}, filePayload);
-                        break;
-                    case 'llm':
-                        extractResult = await client.sendLLMRequest(`Analyze and extract all financial metrics. Document type: ${formatDocType(docType)}. Entity: ${entity}. Period: ${period}.`, '', {}, filePayload);
-                        break;
-                    case 'bot': {
-                        extractResult = await client.sendBotRequest(prompt, docId, '', {}, filePayload);
-                        break;
-                    }
+                // Truncate very large documents to avoid API limits
+                const MAX_CHARS = 100000;
+                if (fileText.length > MAX_CHARS) {
+                    addPollLogEntry('fa-exclamation-triangle', `Document text is ${fileText.length} chars — truncating to ${MAX_CHARS}`, 'poll-warning');
+                    fileText = fileText.substring(0, MAX_CHARS);
                 }
+
+                addPollLogEntry('fa-check-circle', `Text extracted (${fileText.length} chars). Sending LLM request...`, 'poll-success');
+
+                // ── Step 2: POST /functions/llm with text in prompt ──
+                const prompt = `Analyze and extract all financial metrics from the following ${formatDocType(docType)}.` +
+                    (entity ? ` Entity: ${entity}.` : '') +
+                    (period ? ` Period: ${period}.` : '') +
+                    ` Return as structured JSON with field names, values, and periods where applicable.\n\n--- Document Content ---\n${fileText}`;
+
+                const extractResult = await client.sendLLMRequest(prompt, '', {
+                    temperature: 0.2,
+                    max_tokens: 4096
+                });
 
                 let extractionOutput = null;
 
                 if (extractResult && extractResult.ok) {
                     callId = client._extractCallId(extractResult.data);
-                    addPollLogEntry('fa-check-circle', `Request accepted. call_id: ${callId || 'none'}`, 'poll-success');
+                    addPollLogEntry('fa-check-circle', `LLM request accepted. call_id: ${callId || 'none'}`, 'poll-success');
 
-                    // ── Step 2: Poll status until complete ──
+                    // ── Step 3: Poll GET /output/{id} until complete ──
                     if (callId) {
                         addPollLogEntry('fa-satellite-dish', `Polling status for call_id: ${callId}...`, 'poll-info');
                         $('#statusPollBadge').textContent = 'Polling...';
@@ -292,12 +281,12 @@
                 }
 
                 fileItem.status = extractionOutput != null ? 'success' : (callId ? 'processing' : 'error');
-                addExtractionRecord(fileItem, docId, callId, method, extractionOutput);
+                addExtractionRecord(fileItem, docId, callId, 'llm', extractionOutput);
             } catch (err) {
                 fileItem.status = 'error';
                 addPollLogEntry('fa-times-circle', `Error: ${fileItem.name} — ${err.message}`, 'poll-error');
                 showToast(`Error: ${fileItem.name} — ${err.message}`, 'error');
-                addExtractionRecord(fileItem, docId, null, method, null);
+                addExtractionRecord(fileItem, docId, null, 'llm', null);
             }
         }
 
@@ -307,7 +296,7 @@
         const submission = {
             id: generateId(),
             files: files.map(f => f.name),
-            docType, entity, period, method,
+            docType, entity, period, method: 'llm',
             time: new Date().toISOString(),
             status: files.every(f => f.status === 'success') ? 'completed' : 'partial'
         };

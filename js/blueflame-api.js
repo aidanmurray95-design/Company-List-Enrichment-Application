@@ -351,6 +351,46 @@ class BlueFlameClient {
         return this.post('/functions/upload', body);
     }
 
+    /**
+     * Convert a File to plain text, client-side.
+     * .xlsx/.xls → CSV via SheetJS, .csv → read as text, .pdf → extract via pdf.js
+     */
+    async fileToText(file) {
+        const ext = file.name.split('.').pop().toLowerCase();
+
+        if (ext === 'csv') {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = reject;
+                reader.readAsText(file);
+            });
+        }
+
+        if (ext === 'xlsx' || ext === 'xls') {
+            const buffer = await file.arrayBuffer();
+            const workbook = XLSX.read(buffer, { type: 'array' });
+            return workbook.SheetNames.map(name => {
+                const csv = XLSX.utils.sheet_to_csv(workbook.Sheets[name]);
+                return workbook.SheetNames.length > 1 ? `--- Sheet: ${name} ---\n${csv}` : csv;
+            }).join('\n\n');
+        }
+
+        if (ext === 'pdf') {
+            const buffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+            const pages = [];
+            for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const content = await page.getTextContent();
+                pages.push(content.items.map(item => item.str).join(' '));
+            }
+            return pages.join('\n\n');
+        }
+
+        throw new Error(`Unsupported file type: .${ext}`);
+    }
+
     _fileToBase64(file) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();

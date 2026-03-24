@@ -122,23 +122,7 @@
                                 <label><i class="fas fa-calendar"></i> Reporting Period</label>
                                 <input type="text" id="reportingPeriod" class="form-control" placeholder="e.g., Q4 2024">
                             </div>
-                            <div class="form-group">
-                                <label><i class="fas fa-cogs"></i> Extraction Method</label>
-                                <select id="extractionMethod" class="form-control">
-                                    <option value="scan">Scan Request (Full Extraction)</option>
-                                    <option value="qna">QnA Request (Question-Based)</option>
-                                    <option value="llm">LLM Request (Prompt-Based)</option>
-                                    <option value="bot">Bot Request (Conversational)</option>
-                                </select>
-                            </div>
-                        </div>
-                        <!-- Bot Prompt Section (shown only when Bot method selected) -->
-                        <div class="bot-prompt-section" id="botPromptSection" style="display:none;">
-                            <div class="form-group" style="padding: 0 20px;">
-                                <label><i class="fas fa-robot"></i> Bot Prompt / Instructions</label>
-                                <textarea id="botPromptInput" class="form-control" rows="4" placeholder="Enter your instructions for the bot, e.g.:&#10;&#10;Please extract all revenue line items, net income, and EBITDA from this income statement. Also identify the reporting entity and fiscal period."></textarea>
-                                <span class="form-hint">This prompt will be sent as the <code>message</code> field in the Bot Request API call. Be specific about what data you need extracted.</span>
-                            </div>
+                            <input type="hidden" id="extractionMethod" value="llm">
                         </div>
                         <!-- Status Polling Progress (shown during extraction) -->
                         <div class="status-poll-section" id="statusPollSection" style="display:none;">
@@ -616,6 +600,12 @@
             </div>
         </div>
     </main>
+
+    <!-- SheetJS for xlsx/xls/csv parsing -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+    <!-- PDF.js for PDF text extraction -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 
     <script src="js/api-endpoints.js"></script>
     <script src="js/blueflame-api.js"></script>
