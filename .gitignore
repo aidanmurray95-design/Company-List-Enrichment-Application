@@ -1,0 +1,5 @@
+node_modules/
+test_*
+*.json
+!vercel.json
+!package.json
