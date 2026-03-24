@@ -251,25 +251,27 @@
                         const uploadOutput = uploadStatusResult.data?.output;
                         const uploadStatus = String(uploadStatusResult.data?.status || '').toLowerCase();
                         // Extract document_id from the upload output
-                        if (uploadOutput && typeof uploadOutput === 'object') {
-                            docId = uploadOutput.document_id || uploadOutput.doc_id || uploadOutput.id || null;
-                        } else if (typeof uploadOutput === 'string') {
-                            try { const parsed = JSON.parse(uploadOutput); docId = parsed.document_id || parsed.doc_id || parsed.id || null; } catch (e) { /* not JSON */ }
-                        }
+                        docId = extractDocumentId(uploadOutput);
                         if (docId) {
                             addPollLogEntry('fa-check-circle', `Upload complete. document_id: ${docId}`, 'poll-success');
                         } else {
-                            // Fallback: use the upload call_id as document reference
-                            docId = uploadCallId;
-                            addPollLogEntry('fa-info-circle', `Upload status: ${uploadStatus}. No document_id in output — using call_id as reference: ${docId}`, 'poll-warning');
+                            addPollLogEntry('fa-times-circle', `Upload status: ${uploadStatus}. Could not extract document_id from output.`, 'poll-error');
+                            addPollLogEntry('fa-info-circle', `Output received: ${typeof uploadOutput === 'object' ? JSON.stringify(uploadOutput) : uploadOutput}`, 'poll-warning');
+                            fileItem.status = 'error';
+                            addExtractionRecord(fileItem, null, uploadCallId, method);
+                            continue;  // Skip extraction — no valid document_id
                         }
                     } else {
-                        docId = uploadCallId;
-                        addPollLogEntry('fa-exclamation-triangle', `Upload polling ended: ${uploadStatusResult?.statusText || 'timeout'}. Using call_id as reference: ${docId}`, 'poll-warning');
+                        addPollLogEntry('fa-times-circle', `Upload polling ended without result: ${uploadStatusResult?.statusText || 'timeout'}. Cannot proceed without document_id.`, 'poll-error');
+                        fileItem.status = 'error';
+                        addExtractionRecord(fileItem, null, uploadCallId, method);
+                        continue;  // Skip extraction — upload did not complete
                     }
                 } else {
-                    docId = generateId();
-                    addPollLogEntry('fa-exclamation-triangle', `No call_id from upload — using generated ID: ${docId}`, 'poll-warning');
+                    addPollLogEntry('fa-times-circle', `Upload did not return a call_id. Cannot track upload status.`, 'poll-error');
+                    fileItem.status = 'error';
+                    addExtractionRecord(fileItem, null, null, method);
+                    continue;  // Skip extraction — no way to get document_id
                 }
 
                 // ── Step 3: Send extraction request using document_id ──
@@ -1523,6 +1525,23 @@
     function formatFileSize(bytes) { if (!bytes) return '0 B'; const s = ['B', 'KB', 'MB', 'GB']; const i = Math.floor(Math.log(bytes) / Math.log(1024)); return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + s[i]; }
     function getTimeAgo(d) { const s = Math.floor((new Date() - new Date(d)) / 1000); if (s < 60) return 'Just now'; if (s < 3600) return `${Math.floor(s / 60)}m ago`; if (s < 86400) return `${Math.floor(s / 3600)}h ago`; if (s < 604800) return `${Math.floor(s / 86400)}d ago`; return new Date(d).toLocaleDateString(); }
     function getStatusBadge(s) { const m = { completed: '<span class="badge success">Completed</span>', approved: '<span class="badge success">Approved</span>', processing: '<span class="badge info">Processing</span>', failed: '<span class="badge danger">Failed</span>', pending: '<span class="badge">Pending</span>', success: '<span class="badge success">Success</span>', partial: '<span class="badge">Partial</span>' }; return m[s] || `<span class="badge">${s || 'Unknown'}</span>`; }
+    /**
+     * Extract document_id from an upload output response.
+     * Searches common field names in object or JSON-string output.
+     * Returns null if no document_id can be found.
+     */
+    function extractDocumentId(output) {
+        if (!output) return null;
+        let obj = output;
+        if (typeof output === 'string') {
+            try { obj = JSON.parse(output); } catch (e) { return null; }
+        }
+        if (typeof obj !== 'object') return null;
+        // Check common field names for the document identifier
+        return obj.document_id || obj.documentId || obj.doc_id || obj.docId
+            || obj.file_id || obj.fileId || obj.key || null;
+    }
+
     function formatDocType(t) { return { income_statement: 'Income Statement', balance_sheet: 'Balance Sheet', cash_flow: 'Cash Flow Statement', trial_balance: 'Trial Balance', general_ledger: 'General Ledger', other: 'Other' }[t] || t; }
     function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
     function escapeAttr(s) { return String(s || '').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
