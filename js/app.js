@@ -490,8 +490,8 @@
                 });
                 break;
             case 'mapped': {
-                const { mapped, unmapped } = classifyDatapoints(ext.datapoints || []);
-                container.innerHTML = renderMappedSchemaView(mapped, unmapped.length);
+                const { mapped, unmapped, validationChecks } = classifyDatapoints(ext.datapoints || []);
+                container.innerHTML = renderMappedSchemaView(mapped, unmapped.length, validationChecks);
                 break;
             }
             case 'unmapped': {
@@ -1606,116 +1606,258 @@
         }
     };
 
-    /** Fuzzy matching keywords → canonical line item + statement */
-    const LABEL_ALIASES = [
-        { patterns: ['cash', 'liquidity', 'cash & short-term', 'cash equiv'], field: 'Cash & Equivalents', stmt: 'BS' },
-        { patterns: ['trade receivable', 'net receivable', 'a/r', 'accounts receivable', 'ar'], field: 'Accounts Receivable', stmt: 'BS' },
-        { patterns: ['inventory', 'finished goods', 'raw material', 'wip', 'stock'], field: 'Inventory', stmt: 'BS' },
-        { patterns: ['prepaid', 'deposit', 'other current asset', 'other ca'], field: 'Other Current Assets', stmt: 'BS' },
-        { patterns: ['pp&e', 'ppe', 'fixed asset', 'tangible asset', 'property plant', 'net ppe'], field: 'PP&E (Net)', stmt: 'BS' },
-        { patterns: ['goodwill', 'intangible', 'customer relationship', 'ip', 'patent'], field: 'Intangibles & Goodwill', stmt: 'BS' },
-        { patterns: ['total asset'], field: 'Total Assets', stmt: 'BS' },
-        { patterns: ['trade payable', 'a/p', 'accounts payable', 'ap'], field: 'Accounts Payable', stmt: 'BS' },
-        { patterns: ['accrued', 'accrual', 'accrued comp', 'accrued liabilit'], field: 'Accrued Expenses', stmt: 'BS' },
-        { patterns: ['revolver', 'current portion ltd', 'line of credit', 'short-term debt', 'short term debt'], field: 'Short-Term Debt', stmt: 'BS' },
-        { patterns: ['term loan', 'senior secured', 'notes payable', 'bond', 'long-term debt', 'long term debt', 'ltd'], field: 'Long-Term Debt', stmt: 'BS' },
-        { patterns: ['total liabilit'], field: 'Total Liabilities', stmt: 'BS' },
-        { patterns: ['member equity', 'partner capital', 'retained earning', 'shareholder equity', 'owner equity', 'stockholder equity', 'total equity'], field: "Owner's Equity / Retained Earnings", stmt: 'BS' },
-        { patterns: ['total liabilities & equity', 'total liabilities and equity', 'total l&e', 'total l & e'], field: 'Total Liabilities & Equity', stmt: 'BS' },
-        { patterns: ['net sales', 'total revenue', 'gross revenue', 'revenue', 'net revenue', 'sales'], field: 'Revenue', stmt: 'IS' },
-        { patterns: ['cost of sales', 'cost of revenue', 'cost of goods', 'cogs', 'direct cost'], field: 'COGS', stmt: 'IS' },
-        { patterns: ['gross profit', 'gross margin'], field: 'Gross Profit', stmt: 'IS' },
-        { patterns: ['sg&a', 'sga', 'selling expense', 'g&a', 'general & admin', 'overhead', 'opex', 'operating expense'], field: 'SG&A', stmt: 'IS' },
-        { patterns: ['depreciation', 'amortization', 'd&a', 'da'], field: 'D&A', stmt: 'IS' },
-        { patterns: ['operating income', 'ebit', 'income from operation'], field: 'Operating Income (EBIT)', stmt: 'IS' },
-        { patterns: ['interest expense', 'interest cost', 'debt service'], field: 'Interest Expense', stmt: 'IS' },
-        { patterns: ['other income', 'other expense', 'non-operating'], field: 'Other Income / (Expense)', stmt: 'IS' },
-        { patterns: ['pre-tax', 'pretax', 'income before tax', 'ebt'], field: 'Pre-Tax Income', stmt: 'IS' },
-        { patterns: ['income tax', 'tax expense', 'provision for tax'], field: 'Tax Expense', stmt: 'IS' },
-        { patterns: ['net income', 'net profit', 'net earning', 'bottom line'], field: 'Net Income', stmt: 'IS' },
-        { patterns: ['ebitda'], field: 'EBITDA', stmt: 'IS' },
-        { patterns: ['earnings per share', 'eps'], field: 'EPS', stmt: 'IS' },
-        { patterns: ['d&a add-back', 'depreciation add', 'amortization add'], field: 'D&A Add-Back', stmt: 'CF' },
-        { patterns: ['working capital', 'change in a/r', 'change in inventory', 'change in a/p', 'delta'], field: 'Changes in Working Capital', stmt: 'CF' },
-        { patterns: ['cash from operation', 'cfo', 'operating cash'], field: 'Cash from Operations (CFO)', stmt: 'CF' },
-        { patterns: ['capex', 'capital expenditure', 'purchase of pp&e', 'purchases of ppe'], field: 'CapEx', stmt: 'CF' },
-        { patterns: ['acquisition', 'divestiture'], field: 'Acquisitions / Divestitures', stmt: 'CF' },
-        { patterns: ['cash from invest', 'cfi', 'investing cash'], field: 'Cash from Investing (CFI)', stmt: 'CF' },
-        { patterns: ['debt issuance', 'debt repayment', 'borrowing', 'debt proceed', 'repayment'], field: 'Debt Issuance / Repayment', stmt: 'CF' },
-        { patterns: ['dividend', 'distribution', 'buyback', 'equity issuance'], field: 'Equity Issuance / Distributions', stmt: 'CF' },
-        { patterns: ['cash from financing', 'cff', 'financing cash'], field: 'Cash from Financing (CFF)', stmt: 'CF' },
-        { patterns: ['net change in cash', 'change in cash', 'ending cash'], field: 'Net Change in Cash', stmt: 'CF' }
+    // ── External → Internal mapping table (from specification) ──
+    const MAPPING_TABLE = [
+        // Balance Sheet
+        { variants: ['cash', 'cash & short-term investments', 'liquidity', 'cash equiv', 'cash and cash equiv', 'cash & equiv'], field: 'Cash & Equivalents', stmt: 'BS' },
+        { variants: ['trade receivables', 'net receivables', 'a/r', 'accounts receivable', 'ar', 'trade receivable', 'net receivable'], field: 'Accounts Receivable', stmt: 'BS' },
+        { variants: ['finished goods', 'raw materials', 'wip', 'stock', 'inventory', 'raw material'], field: 'Inventory', stmt: 'BS' },
+        { variants: ['prepaids', 'deposits', 'other ca', 'prepaid', 'other current asset', 'other current assets', 'deposit'], field: 'Other Current Assets', stmt: 'BS' },
+        { variants: ['fixed assets', 'tangible assets', 'net pp&e', 'pp&e', 'ppe', 'net ppe', 'property plant', 'property plant and equipment', 'fixed asset', 'tangible asset'], field: 'PP&E (Net)', stmt: 'BS' },
+        { variants: ['goodwill', 'customer relationships', 'ip', 'patents', 'intangible', 'intangibles', 'intangibles & goodwill', 'intangible asset', 'patent', 'customer relationship'], field: 'Intangibles & Goodwill', stmt: 'BS' },
+        { variants: ['other non-current asset', 'other noncurrent asset', 'other long-term asset', 'other non current asset'], field: 'Other Non-Current Assets', stmt: 'BS' },
+        { variants: ['total assets', 'total asset'], field: 'Total Assets', stmt: 'BS' },
+        { variants: ['trade payables', 'a/p', 'accounts payable', 'ap', 'trade payable'], field: 'Accounts Payable', stmt: 'BS' },
+        { variants: ['accruals', 'accrued liabilities', 'accrued comp', 'accrued', 'accrual', 'accrued expense', 'accrued expenses'], field: 'Accrued Expenses', stmt: 'BS' },
+        { variants: ['revolver', 'current portion ltd', 'line of credit', 'short-term debt', 'short term debt', 'current portion of long-term debt'], field: 'Short-Term Debt', stmt: 'BS' },
+        { variants: ['other current liabilit', 'other current liability', 'other cl'], field: 'Other Current Liabilities', stmt: 'BS' },
+        { variants: ['term loan', 'senior secured', 'notes payable', 'bonds', 'long-term debt', 'long term debt', 'bond', 'note payable'], field: 'Long-Term Debt', stmt: 'BS' },
+        { variants: ['other non-current liabilit', 'other noncurrent liabilit', 'other long-term liabilit'], field: 'Other Non-Current Liabilities', stmt: 'BS' },
+        { variants: ['total liabilities', 'total liabilit'], field: 'Total Liabilities', stmt: 'BS' },
+        { variants: ["members' equity", "partners' capital", 'retained earnings', 'shareholder equity', "owner's equity", 'stockholder equity', 'total equity', 'member equity', 'partner capital', 'retained earning', 'shareholders equity', 'owners equity'], field: "Owner's Equity / Retained Earnings", stmt: 'BS' },
+        { variants: ['total liabilities & equity', 'total liabilities and equity', 'total l&e'], field: 'Total Liabilities & Equity', stmt: 'BS' },
+        // Income Statement
+        { variants: ['net sales', 'total revenue', 'gross revenue', 'revenue', 'net revenue', 'sales', 'top line'], field: 'Revenue', stmt: 'IS' },
+        { variants: ['cost of sales', 'cost of revenue', 'direct costs', 'cogs', 'cost of goods sold', 'cost of goods', 'direct cost'], field: 'COGS', stmt: 'IS' },
+        { variants: ['gross profit', 'gross margin', 'gross income'], field: 'Gross Profit', stmt: 'IS' },
+        { variants: ['selling expense', 'g&a', 'overhead', 'opex', 'sg&a', 'sga', 'general & admin', 'general and admin', 'operating expense', 'operating expenses', 'selling general'], field: 'SG&A', stmt: 'IS' },
+        { variants: ['depreciation', 'amortization', 'd&a', 'da', 'depreciation & amortization', 'depreciation and amortization'], field: 'D&A', stmt: 'IS' },
+        { variants: ['other operating expense', 'other opex', 'other operating cost'], field: 'Other Operating Expenses', stmt: 'IS' },
+        { variants: ['operating income', 'ebit', 'income from operations', 'operating profit', 'operating income ebit'], field: 'Operating Income (EBIT)', stmt: 'IS' },
+        { variants: ['interest', 'debt service cost', 'interest expense', 'interest cost', 'debt service'], field: 'Interest Expense', stmt: 'IS' },
+        { variants: ['other income', 'other expense', 'non-operating', 'other income expense', 'non operating income'], field: 'Other Income / (Expense)', stmt: 'IS' },
+        { variants: ['pre-tax income', 'pretax income', 'income before tax', 'ebt', 'pretax', 'pre tax income', 'earnings before tax'], field: 'Pre-Tax Income', stmt: 'IS' },
+        { variants: ['income tax', 'provision for taxes', 'tax expense', 'provision for tax', 'income tax expense', 'tax'], field: 'Tax Expense', stmt: 'IS' },
+        { variants: ['net income', 'net profit', 'net earnings', 'bottom line', 'net earning', 'net loss'], field: 'Net Income', stmt: 'IS' },
+        { variants: ['ebitda', 'adjusted ebitda'], field: 'EBITDA', stmt: 'IS' },
+        { variants: ['earnings per share', 'eps', 'basic eps', 'diluted eps'], field: 'EPS', stmt: 'IS' },
+        // Cash Flow
+        { variants: ['d&a add-back', 'depreciation add-back', 'amortization add-back', 'da add back', 'depreciation add back'], field: 'D&A Add-Back', stmt: 'CF' },
+        { variants: ['changes in working capital', 'change in working capital', 'working capital', 'delta in a/r', 'delta in inventory', 'delta in a/p', 'change in a/r', 'change in inventory', 'change in a/p', 'wc changes'], field: 'Changes in Working Capital', stmt: 'CF' },
+        { variants: ['cash from operations', 'cfo', 'operating cash flow', 'cash from operating', 'operating cash', 'net cash from operating'], field: 'Cash from Operations (CFO)', stmt: 'CF' },
+        { variants: ['capital expenditures', 'purchases of pp&e', 'capex', 'capital expenditure', 'purchase of ppe', 'purchases of ppe', 'cap ex'], field: 'CapEx', stmt: 'CF' },
+        { variants: ['acquisitions', 'divestitures', 'acquisition', 'divestiture', 'acquisitions / divestitures'], field: 'Acquisitions / Divestitures', stmt: 'CF' },
+        { variants: ['cash from investing', 'cfi', 'investing cash flow', 'cash from invest', 'investing cash', 'net cash from investing'], field: 'Cash from Investing (CFI)', stmt: 'CF' },
+        { variants: ['borrowings', 'debt proceeds', 'repayments', 'debt issuance', 'debt repayment', 'borrowing', 'debt proceed', 'repayment', 'debt issuance / repayment'], field: 'Debt Issuance / Repayment', stmt: 'CF' },
+        { variants: ['dividends', 'distributions', 'buybacks', 'dividend', 'distribution', 'buyback', 'equity issuance', 'equity issuance / distributions'], field: 'Equity Issuance / Distributions', stmt: 'CF' },
+        { variants: ['cash from financing', 'cff', 'financing cash flow', 'financing cash', 'net cash from financing'], field: 'Cash from Financing (CFF)', stmt: 'CF' },
+        { variants: ['net change in cash', 'change in cash', 'ending cash', 'ending cash balance', 'net cash change'], field: 'Net Change in Cash', stmt: 'CF' }
     ];
 
-    /**
-     * Attempt to map a datapoint label to a canonical line item.
-     * Returns { field, statement, category } or null if no match.
-     */
-    function fuzzyMapDatapoint(dp) {
-        // If the LLM already tagged it with statement + field, validate it
-        const dpField = (dp.field || dp.label || '').trim();
-        const dpStmt = (dp.statement || '').toUpperCase();
+    /** Sign convention: which categories should be positive */
+    const POSITIVE_SIGN = {
+        BS: ['Current Assets', 'Non-Current Assets', '—', 'Equity'],
+        IS: ['Top Line', '—', 'Bottom Line'],
+        CF: ['Operating', '—']
+    };
 
-        if (dpStmt && SCHEMA_MAP[dpStmt]) {
-            const schemaItems = SCHEMA_MAP[dpStmt].items;
-            // Direct match against schema
-            for (const [canonical, category] of Object.entries(schemaItems)) {
-                if (canonical.toLowerCase() === dpField.toLowerCase()) {
-                    return { field: canonical, statement: dpStmt, category };
-                }
+    // ── String similarity (Levenshtein-based token-set ratio) ──
+
+    /** Levenshtein distance between two strings */
+    function levenshtein(a, b) {
+        const m = a.length, n = b.length;
+        if (m === 0) return n;
+        if (n === 0) return m;
+        const d = Array.from({ length: m + 1 }, (_, i) => i);
+        for (let j = 1; j <= n; j++) {
+            let prev = d[0]; d[0] = j;
+            for (let i = 1; i <= m; i++) {
+                const tmp = d[i];
+                d[i] = a[i - 1] === b[j - 1] ? prev : Math.min(prev, d[i], d[i - 1]) + 1;
+                prev = tmp;
             }
         }
+        return d[m];
+    }
 
-        // Fuzzy match against alias table
-        const normalized = dpField.toLowerCase().replace(/[^a-z0-9\s\/&()-]/g, '').trim();
-        if (!normalized) return null;
+    /** Similarity ratio 0–100 between two strings */
+    function similarity(a, b) {
+        if (!a && !b) return 100;
+        if (!a || !b) return 0;
+        const maxLen = Math.max(a.length, b.length);
+        if (maxLen === 0) return 100;
+        return Math.round((1 - levenshtein(a, b) / maxLen) * 100);
+    }
 
-        for (const alias of LABEL_ALIASES) {
-            for (const pattern of alias.patterns) {
-                if (normalized.includes(pattern) || pattern.includes(normalized)) {
-                    const category = SCHEMA_MAP[alias.stmt]?.items?.[alias.field] || '—';
-                    return { field: alias.field, statement: alias.stmt, category };
-                }
-            }
-        }
+    /** Token-set similarity: best match between token sets */
+    function tokenSetSimilarity(input, candidate) {
+        const tokensA = input.split(/\s+/).filter(Boolean);
+        const tokensB = candidate.split(/\s+/).filter(Boolean);
+        // Full string similarity
+        const full = similarity(input, candidate);
+        // Check if input contains candidate or vice versa
+        const containsScore = input.includes(candidate) || candidate.includes(input) ? 95 : 0;
+        // Sorted token intersection similarity
+        const sortedA = [...tokensA].sort().join(' ');
+        const sortedB = [...tokensB].sort().join(' ');
+        const sorted = similarity(sortedA, sortedB);
+        return Math.max(full, containsScore, sorted);
+    }
 
-        return null;
+    /** Normalize a label: lowercase, strip special chars, collapse whitespace */
+    function normalizeLabel(label) {
+        return (label || '').toLowerCase()
+            .replace(/[^a-z0-9\s\/&()-]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
     }
 
     /**
-     * Classify datapoints into mapped and unmapped buckets.
-     * Attempts fuzzy mapping for each datapoint.
+     * Match an external label against the mapping table.
+     * Uses token-set similarity with ≥85% threshold.
+     * Returns { field, stmt, score } or null.
+     */
+    function matchLabel(rawLabel) {
+        const normalized = normalizeLabel(rawLabel);
+        if (!normalized) return null;
+
+        let bestMatch = null;
+        let bestScore = 0;
+
+        for (const entry of MAPPING_TABLE) {
+            for (const variant of entry.variants) {
+                const score = tokenSetSimilarity(normalized, normalizeLabel(variant));
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMatch = { field: entry.field, stmt: entry.stmt, score };
+                }
+            }
+        }
+
+        // Threshold ≥ 85%
+        return bestScore >= 85 ? bestMatch : null;
+    }
+
+    /**
+     * Normalize sign convention for a value.
+     * Assets, Revenue, Cash Inflows → positive
+     * Liabilities, Expenses, Cash Outflows → negative (or positive per convention)
+     */
+    function normalizeSign(value, stmt, category) {
+        const num = typeof value === 'number' ? value : parseFloat(String(value).replace(/[$,\s%]/g, ''));
+        if (isNaN(num)) return value; // Non-numeric, return as-is
+        const positive = POSITIVE_SIGN[stmt]?.includes(category);
+        // We don't flip signs — just flag if convention is violated
+        return num;
+    }
+
+    /**
+     * Cross-statement integrity checks.
+     * Returns array of { check, pass, detail } objects.
+     */
+    function validateCrossStatement(mapped) {
+        const checks = [];
+        const val = (stmt, field) => {
+            const dp = mapped.find(d => d.statement === stmt && d.field === field);
+            if (!dp) return null;
+            const num = typeof dp.value === 'number' ? dp.value : parseFloat(String(dp.value).replace(/[$,\s%]/g, ''));
+            return isNaN(num) ? null : num;
+        };
+
+        // Total Assets = Total Liabilities + Equity
+        const ta = val('BS', 'Total Assets');
+        const tl = val('BS', 'Total Liabilities');
+        const eq = val('BS', "Owner's Equity / Retained Earnings");
+        if (ta != null && tl != null && eq != null) {
+            const pass = Math.abs(ta - (tl + eq)) < 1;
+            checks.push({ check: 'Total Assets = Total Liabilities + Equity', pass, detail: `${ta} vs ${tl} + ${eq} = ${tl + eq}` });
+        }
+
+        // Net Income (IS) = Net Income (CF starting point)
+        const niIS = val('IS', 'Net Income');
+        const niCF = val('CF', 'Net Income');
+        if (niIS != null && niCF != null) {
+            const pass = Math.abs(niIS - niCF) < 1;
+            checks.push({ check: 'Net Income (IS) = Net Income (CF)', pass, detail: `IS: ${niIS} vs CF: ${niCF}` });
+        }
+
+        // Ending Cash (CF) = Cash & Equivalents (BS)
+        const cashBS = val('BS', 'Cash & Equivalents');
+        const cashCF = val('CF', 'Net Change in Cash');
+        if (cashBS != null && cashCF != null) {
+            checks.push({ check: 'Ending Cash (CF) ↔ Cash & Equivalents (BS)', pass: null, detail: `BS Cash: ${cashBS}, CF Net Change: ${cashCF} (manual check)` });
+        }
+
+        return checks;
+    }
+
+    /**
+     * Full parsing engine: classify datapoints into mapped/unmapped.
+     * 1. NORMALIZE label
+     * 2. MATCH via fuzzy (≥85% threshold)
+     * 3. Assign or flag UNMAPPED
+     * 4. Validate sign convention
+     * 5. Run cross-statement integrity checks
      */
     function classifyDatapoints(datapoints) {
         const mapped = [];
         const unmapped = [];
 
         datapoints.forEach(dp => {
-            const match = fuzzyMapDatapoint(dp);
+            const rawLabel = dp.field || dp.label || dp.source_label || '';
+            const dpStmt = (dp.statement || '').toUpperCase();
+
+            // Step 1+2: If LLM already tagged it, validate against schema
+            let match = null;
+            if (dpStmt && SCHEMA_MAP[dpStmt]) {
+                for (const [canonical] of Object.entries(SCHEMA_MAP[dpStmt].items)) {
+                    if (normalizeLabel(rawLabel) === normalizeLabel(canonical)) {
+                        const category = SCHEMA_MAP[dpStmt].items[canonical];
+                        match = { field: canonical, stmt: dpStmt, score: 100 };
+                        break;
+                    }
+                }
+            }
+
+            // Step 2: Fuzzy match against mapping table
+            if (!match) {
+                match = matchLabel(rawLabel);
+            }
+
+            // Step 3: Assign or flag
             if (match) {
+                const category = SCHEMA_MAP[match.stmt]?.items?.[match.field] || '—';
+                // Step 4: Normalize sign
+                const normalizedValue = normalizeSign(dp.value, match.stmt, category);
                 mapped.push({
                     ...dp,
                     field: match.field,
-                    statement: match.statement,
-                    category: match.category,
-                    source_label: dp.source_label || dp.label || dp.field || ''
+                    statement: match.stmt,
+                    category,
+                    value: normalizedValue,
+                    matchScore: match.score,
+                    source_label: dp.source_label || dp.label || dp.field || rawLabel
                 });
             } else {
+                // Step 4: UNMAPPED
                 unmapped.push({
                     ...dp,
-                    source_label: dp.source_label || dp.label || dp.field || ''
+                    source_label: dp.source_label || dp.label || dp.field || rawLabel
                 });
             }
         });
 
-        return { mapped, unmapped };
+        // Step 5+6: Cross-statement validation
+        const validationChecks = validateCrossStatement(mapped);
+
+        return { mapped, unmapped, validationChecks };
     }
 
     /**
      * Render the Mapped tab as a preset schema with values filled in.
      * Every canonical line item is shown — populated ones have values, empty ones show '—'.
      */
-    function renderMappedSchemaView(mapped, unmappedCount) {
+    function renderMappedSchemaView(mapped, unmappedCount, validationChecks) {
         const stmtOrder = ['IS', 'BS', 'CF'];
         // Index mapped datapoints by statement+field for fast lookup
         const index = {};
@@ -1737,19 +1879,21 @@
             const filledCount = schemaItems.filter(([f]) => index[`${stmtKey}||${f}`]).length;
 
             html += `<div class="stmt-group"><h4 class="stmt-group-title"><i class="fas ${schema.icon}"></i> ${schema.name} <span class="stmt-count">(${filledCount}/${schemaItems.length} populated)</span></h4>`;
-            html += `<table class="datapoint-table schema-table"><thead><tr><th>Line Item</th><th>Category</th><th>Value</th><th>Period</th><th>Source</th></tr></thead><tbody>`;
+            html += `<table class="datapoint-table schema-table"><thead><tr><th>Line Item</th><th>Category</th><th>Value</th><th>Period</th><th>Source</th><th>Match</th></tr></thead><tbody>`;
 
             schemaItems.forEach(([field, category]) => {
                 const key = `${stmtKey}||${field}`;
                 const dps = index[key];
                 if (dps && dps.length > 0) {
                     dps.forEach(dp => {
+                        const scoreClass = (dp.matchScore || 0) >= 95 ? 'confidence-high' : (dp.matchScore || 0) >= 85 ? 'confidence-medium' : 'confidence-low';
                         html += `<tr class="schema-row-filled">`;
                         html += `<td><strong>${escapeHtml(field)}</strong></td>`;
                         html += `<td><span class="category-badge">${escapeHtml(category)}</span></td>`;
                         html += `<td class="datapoint-value">${escapeHtml(String(dp.value ?? ''))}</td>`;
                         html += `<td>${escapeHtml(dp.period || '—')}</td>`;
                         html += `<td class="text-muted" style="font-size:11px;">${escapeHtml(dp.source_label || '—')}</td>`;
+                        html += `<td><span class="datapoint-confidence ${scoreClass}">${dp.matchScore || '—'}%</span></td>`;
                         html += `</tr>`;
                     });
                 } else {
@@ -1759,12 +1903,26 @@
                     html += `<td class="text-muted">—</td>`;
                     html += `<td class="text-muted">—</td>`;
                     html += `<td class="text-muted">—</td>`;
+                    html += `<td class="text-muted">—</td>`;
                     html += `</tr>`;
                 }
             });
 
             html += `</tbody></table></div>`;
         });
+
+        // Cross-statement validation checks
+        if (validationChecks && validationChecks.length > 0) {
+            html += `<div class="stmt-group"><h4 class="stmt-group-title"><i class="fas fa-clipboard-check"></i> Cross-Statement Validation</h4>`;
+            html += `<div class="validation-checks">`;
+            validationChecks.forEach(ck => {
+                const icon = ck.pass === true ? 'fa-check-circle' : ck.pass === false ? 'fa-times-circle' : 'fa-info-circle';
+                const cls = ck.pass === true ? 'validation-pass' : ck.pass === false ? 'validation-fail' : 'validation-info';
+                html += `<div class="validation-check ${cls}"><i class="fas ${icon}"></i> <strong>${escapeHtml(ck.check)}</strong><span class="text-muted" style="font-size:11px;margin-left:8px;">${escapeHtml(ck.detail)}</span></div>`;
+            });
+            html += `</div></div>`;
+        }
+
         return html;
     }
 

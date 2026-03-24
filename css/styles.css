@@ -564,3 +564,14 @@ select.form-control { cursor: pointer; }
 .unmapped-item-body { display: flex; align-items: center; gap: 12px; }
 .unmapped-item-body .form-control { flex: 1; font-size: 12px; padding: 6px 8px; }
 .unmapped-remap-select { max-width: 300px; }
+
+/* ── Validation checks ── */
+.validation-checks { display: flex; flex-direction: column; gap: 6px; }
+.validation-check { display: flex; align-items: center; padding: 8px 12px; border-radius: 6px; font-size: 13px; gap: 6px; }
+.validation-check i { flex-shrink: 0; }
+.validation-pass { background: rgba(0,176,80,0.08); color: #00b050; }
+.validation-fail { background: rgba(192,57,43,0.08); color: #c0392b; }
+.validation-info { background: rgba(52,101,101,0.08); color: #346565; }
+[data-theme="dark"] .validation-pass { background: rgba(0,176,80,0.15); }
+[data-theme="dark"] .validation-fail { background: rgba(192,57,43,0.15); }
+[data-theme="dark"] .validation-info { background: rgba(52,101,101,0.15); }
