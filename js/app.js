@@ -504,55 +504,14 @@
     }
 
     /**
-     * Logically determine the company name from a row record.
-     * The company name must be a real string like "Ally Health Care",
-     * NEVER a number like "239324" or a record ID.
-     *
-     * Strategy (in priority order):
-     *   1. Check fullRowData for a column whose header looks like a company
-     *      name field. Prefer columns closer to the left. Only accept if
-     *      the value passes looksLikeCompanyName().
-     *   2. Scan all values left to right — take the first value that
-     *      passes looksLikeCompanyName().
-     *   3. If company.name passes validation, use it.
-     *   4. Return null — the enrichment should skip this record.
-     *
-     * Does NOT default to company.name if it looks like a number/ID.
+     * Get the company name to send to @Grata.
+     * Uses company.name — the value from the Company Name Column
+     * the user explicitly selected during import.
+     * Validates it's a real company name (not a number/ID).
+     * Returns null if validation fails so the record is skipped.
      */
     function resolveCompanyName(company) {
-        const row = company.fullRowData || {};
-        const entries = Object.entries(row);
-
-        // Keywords that signal a company-name column header
-        const nameKeywords = [
-            'company', 'company name', 'company_name', 'companyname',
-            'name', 'firm', 'firm name', 'business', 'business name',
-            'entity', 'entity name', 'organization', 'org',
-            'portfolio company', 'portfolio', 'target', 'target name',
-            'investee', 'issuer', 'borrower', 'counterparty', 'account name'
-        ];
-
-        // 1. Match by header — scan left to right, first match wins
-        for (const [header, value] of entries) {
-            const h = header.toLowerCase().trim();
-            if (nameKeywords.some(kw => h === kw || h.includes(kw))) {
-                const v = String(value).trim();
-                if (looksLikeCompanyName(v)) return v;
-            }
-        }
-
-        // 2. No header matched — scan all values left to right
-        //    for the first value that looks like a company name.
-        //    Company names are typically in the leftmost columns.
-        for (const [, value] of entries) {
-            const v = String(value).trim();
-            if (looksLikeCompanyName(v)) return v;
-        }
-
-        // 3. Check company.name only if it passes validation
         if (looksLikeCompanyName(company.name)) return company.name;
-
-        // 4. Could not determine a valid company name
         return null;
     }
 
