@@ -281,6 +281,15 @@
             const name = row[nameCol] != null ? String(row[nameCol]).trim() : '';
             if (!name) return;
 
+            // Store ALL columns (including the name column) as the full row record
+            const fullRowData = {};
+            headers.forEach((h, ci) => {
+                if (row[ci] != null && String(row[ci]).trim()) {
+                    fullRowData[h] = String(row[ci]).trim();
+                }
+            });
+
+            // originalData excludes the name column (for display purposes)
             const originalData = {};
             headers.forEach((h, ci) => {
                 if (ci !== nameCol && row[ci] != null && String(row[ci]).trim()) {
@@ -291,6 +300,7 @@
             newCompanies.push({
                 id: generateId(),
                 name: name,
+                fullRowData: fullRowData,
                 originalData: originalData,
                 enrichedData: {},
                 enrichStatus: 'pending', // pending | enriched | failed
@@ -466,13 +476,20 @@
             addEnrichLog('fa-building', `[${i + 1}/${companiesToEnrich.length}] Enriching: ${company.name}...`, '');
 
             try {
-                // Build row record string from all original data for context
-                const rowRecord = Object.entries(company.originalData).length > 0
-                    ? Object.entries(company.originalData).map(([k, v]) => `${k}: ${v}`).join(', ')
-                    : '';
-                const rowContext = rowRecord ? ` (Row record: ${rowRecord})` : '';
+                // Build the full row record string from ALL columns so the
+                // company can be logically identified from the complete row.
+                // fullRowData includes the name column with its original header.
+                const rowSource = company.fullRowData || company.originalData || {};
+                const rowFields = Object.entries(rowSource);
+                const rowRecordStr = rowFields.length > 0
+                    ? rowFields.map(([k, v]) => `${k}: ${v}`).join(' | ')
+                    : company.name;
 
-                const message = `@grata Give me key details for ${company.name}.${rowContext}`;
+                // The prompt gives @grata the full row so it can determine
+                // which company this is — the name alone (e.g. "Apple") may
+                // be ambiguous, but the row context (industry, location, etc.)
+                // resolves it.
+                const message = `@grata Give me key details for the company in this row record: ${rowRecordStr}`;
 
                 // Send bot request
                 const postResult = await client.sendBotRequest(message);
