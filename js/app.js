@@ -1,17 +1,15 @@
 /**
- * BlueFlame Financial Extractor — Main Application Controller
+ * BlueFlame Company Enrichment — Main Application Controller
  * ─────────────────────────────────────────────────
- * Global Variables:
- *   REST_API_ENDPOINT  →  Base URL for all API calls
- *   API_TOKEN          →  Auth token (X-Api-Key header)
- *   USER_ID            →  User email / unique ID (sent in request bodies)
+ * Three main functions:
+ *   1. Import — Upload spreadsheet of private companies
+ *   2. Enrich — Enrich company data via BlueFlame Bot API
+ *   3. Visualize & Export — View enriched data, export to Excel/CSV/JSON
  *
- * Features:
- *   - Bot prompt field in Upload tab for Bot Request extraction method
- *   - Auto-status polling after every POST (GET /functions/status/{call_id})
- *   - Postman-style Params + Headers + Body tabs in API Explorer
- *   - Prettify JSON button, body type selector (JSON/Raw/None)
- *   - API Calls log tab (hideable) with full request/response detail
+ * Utility tabs (unchanged):
+ *   4. API Explorer (Postman-style)
+ *   5. API Calls Log (hideable)
+ *   6. Configuration (hideable)
  */
 
 (function () {
@@ -19,18 +17,28 @@
 
     const client = new BlueFlameClient();
     const state = {
-        activeTab: 'upload',
-        fileQueue: [],
-        submissions: JSON.parse(localStorage.getItem('bf_submissions') || '[]'),
-        extractions: JSON.parse(localStorage.getItem('bf_extractions') || '[]'),
-        selectedExtractions: new Set(),
+        activeTab: 'import',
+        // Company data
+        companies: JSON.parse(localStorage.getItem('bf_companies') || '[]'),
+        importHistory: JSON.parse(localStorage.getItem('bf_import_history') || '[]'),
+        // Import staging
+        importedHeaders: [],
+        importedRows: [],
+        companyNameColIndex: -1,
+        importFileName: '',
+        // Enrich
+        selectedForEnrich: new Set(),
+        enrichRunning: false,
+        enrichAbort: false,
+        // Visualize
+        companyDetailOpen: false,
+        currentCompany: null,
+        // Utility tabs
         configVisible: false,
         apiCallsVisible: false,
-        detailOpen: false,
-        currentExtraction: null,
-        currentCallDetail: null,
         explorerResponseTab: 'body',
-        currentEndpoint: null
+        currentEndpoint: null,
+        currentCallDetail: null
     };
 
     const $ = (sel) => document.querySelector(sel);
@@ -38,18 +46,17 @@
 
     document.addEventListener('DOMContentLoaded', () => {
         initNavigation();
-        initUploadTab();
-        initReviewTab();
-        initExportTab();
+        initImportTab();
+        initEnrichTab();
+        initVisualizeTab();
         initApiExplorer();
         initApiCallsTab();
         initConfigTab();
         initThemeToggle();
         updateConnectionStatus();
-        // No demo data — extractions are populated from real API responses
-        renderReviewGrid();
-        renderExportSelections();
-        renderRecentSubmissions();
+        renderEnrichCompanyList();
+        renderVisualizeTable();
+        renderRecentImports();
         updateApiCallsBadge();
     });
 
@@ -66,14 +73,14 @@
             state.configVisible = !state.configVisible;
             $('#configNavItem').style.display = state.configVisible ? 'flex' : 'none';
             $('#configToggleIndicator').classList.toggle('active', state.configVisible);
-            if (!state.configVisible && state.activeTab === 'config') switchTab('upload');
+            if (!state.configVisible && state.activeTab === 'config') switchTab('import');
         });
 
         $('#btnToggleApiCalls').addEventListener('click', () => {
             state.apiCallsVisible = !state.apiCallsVisible;
             $('#apiCallsNavItem').style.display = state.apiCallsVisible ? 'flex' : 'none';
             $('#apiCallsToggleIndicator').classList.toggle('active', state.apiCallsVisible);
-            if (!state.apiCallsVisible && state.activeTab === 'api-calls') switchTab('upload');
+            if (!state.apiCallsVisible && state.activeTab === 'api-calls') switchTab('import');
         });
 
         document.addEventListener('click', (e) => {
@@ -87,14 +94,16 @@
         $$('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.tab === tab));
         $$('.tab-content').forEach(t => t.classList.toggle('active', t.id === `tab-${tab}`));
         const names = {
-            upload: 'Upload Documents', review: 'Review Extractions',
-            export: 'Export & Email', 'api-explorer': 'API Explorer',
+            'import': 'Import Companies', enrich: 'Enrich Data',
+            visualize: 'Visualize & Export', 'api-explorer': 'API Explorer',
             'api-calls': 'API Calls', config: 'Configuration'
         };
         $('#breadcrumb span').textContent = names[tab] || tab;
         $('#sidebar').classList.remove('open');
         if (tab === 'api-explorer') syncExplorerGlobals();
         if (tab === 'api-calls') renderApiCallsList();
+        if (tab === 'enrich') renderEnrichCompanyList();
+        if (tab === 'visualize') renderVisualizeTable();
     }
 
     // ============================================
@@ -117,582 +126,667 @@
     }
 
     // ============================================
-    // UPLOAD TAB — with Bot Prompt & Auto-Status
+    // TAB 1: IMPORT COMPANIES
     // ============================================
-    function initUploadTab() {
+    function initImportTab() {
         const dropzone = $('#uploadDropzone');
         const fileInput = $('#fileInput');
         $('#btnBrowseFiles').addEventListener('click', (e) => { e.stopPropagation(); fileInput.click(); });
         dropzone.addEventListener('click', () => fileInput.click());
-        fileInput.addEventListener('change', (e) => { addFilesToQueue(Array.from(e.target.files)); fileInput.value = ''; });
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) handleFileUpload(e.target.files[0]);
+            fileInput.value = '';
+        });
         dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('drag-over'); });
         dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
-        dropzone.addEventListener('drop', (e) => { e.preventDefault(); dropzone.classList.remove('drag-over'); addFilesToQueue(Array.from(e.dataTransfer.files)); });
+        dropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropzone.classList.remove('drag-over');
+            if (e.dataTransfer.files.length > 0) handleFileUpload(e.dataTransfer.files[0]);
+        });
+
         $$('.upload-type-selector .chip').forEach(chip => {
             chip.addEventListener('click', () => {
                 $$('.upload-type-selector .chip').forEach(c => c.classList.remove('active'));
                 chip.classList.add('active');
-                fileInput.setAttribute('accept', chip.dataset.type === 'pdf' ? '.pdf' : chip.dataset.type === 'excel' ? '.xls,.xlsx,.csv' : '.pdf,.xls,.xlsx,.csv');
+                fileInput.setAttribute('accept', chip.dataset.type === 'csv' ? '.csv' : chip.dataset.type === 'excel' ? '.xls,.xlsx' : '.xls,.xlsx,.csv');
             });
         });
-        $('#btnClearQueue').addEventListener('click', () => { state.fileQueue = []; renderFileQueue(); updateSubmitButton(); });
-        $('#btnSubmitExtraction').addEventListener('click', submitForExtraction);
 
-        // Extraction method is now always LLM — no method selector needed
-    }
-
-    function addFilesToQueue(files) {
-        const allowed = ['.pdf', '.xls', '.xlsx', '.csv'];
-        files.forEach(file => {
-            const ext = '.' + file.name.split('.').pop().toLowerCase();
-            if (allowed.includes(ext)) {
-                state.fileQueue.push({ id: generateId(), file, name: file.name, size: file.size, type: ext.replace('.', ''), status: 'queued' });
-            } else { showToast(`Unsupported file type: ${file.name}`, 'warning'); }
+        $('#companyNameColumn').addEventListener('change', (e) => {
+            state.companyNameColIndex = parseInt(e.target.value);
+            updateConfirmButton();
         });
-        renderFileQueue();
-        updateSubmitButton();
+
+        $('#btnClearImport').addEventListener('click', clearImportStaging);
+        $('#btnConfirmImport').addEventListener('click', confirmImport);
     }
 
-    function renderFileQueue() {
-        const container = $('#fileQueue');
-        if (state.fileQueue.length === 0) {
-            container.innerHTML = '<div class="empty-state small"><i class="fas fa-inbox"></i><p>No files queued</p></div>';
+    async function handleFileUpload(file) {
+        const ext = file.name.split('.').pop().toLowerCase();
+        if (!['xlsx', 'xls', 'csv'].includes(ext)) {
+            showToast(`Unsupported file type: .${ext}. Use Excel or CSV.`, 'warning');
             return;
         }
-        container.innerHTML = state.fileQueue.map(f => {
-            const ic = f.type === 'pdf' ? 'pdf' : (f.type === 'csv' ? 'csv' : 'excel');
-            const in_ = f.type === 'pdf' ? 'fa-file-pdf' : (f.type === 'csv' ? 'fa-file-csv' : 'fa-file-excel');
-            return `<div class="file-queue-item" data-id="${f.id}"><div class="file-icon ${ic}"><i class="fas ${in_}"></i></div><div class="file-info"><div class="file-name" title="${f.name}">${f.name}</div><div class="file-size">${formatFileSize(f.size)}</div></div><span class="file-remove" data-id="${f.id}"><i class="fas fa-times"></i></span></div>`;
+
+        try {
+            let headers = [];
+            let rows = [];
+
+            if (ext === 'csv') {
+                const text = await readFileAsText(file);
+                const parsed = parseCSV(text);
+                headers = parsed.headers;
+                rows = parsed.rows;
+            } else {
+                const buffer = await file.arrayBuffer();
+                const workbook = XLSX.read(buffer, { type: 'array' });
+                const sheetName = workbook.SheetNames[0];
+                const sheet = workbook.Sheets[sheetName];
+                const json = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+                if (json.length > 0) {
+                    headers = json[0].map(h => String(h).trim());
+                    rows = json.slice(1).filter(row => row.some(cell => cell !== ''));
+                }
+            }
+
+            if (headers.length === 0) {
+                showToast('No data found in file. Ensure the first row contains headers.', 'warning');
+                return;
+            }
+
+            state.importedHeaders = headers;
+            state.importedRows = rows;
+            state.importFileName = file.name;
+            state.companyNameColIndex = -1;
+
+            // Show preview
+            $('#importPreviewSection').style.display = 'block';
+            $('#importRowCount').textContent = `${rows.length} rows`;
+            $('#importColCount').textContent = `${headers.length} columns`;
+
+            // Populate company name column dropdown
+            const select = $('#companyNameColumn');
+            select.innerHTML = '<option value="">-- Select the column containing company names --</option>';
+            headers.forEach((h, i) => {
+                const opt = document.createElement('option');
+                opt.value = i;
+                opt.textContent = h;
+                select.appendChild(opt);
+            });
+
+            // Auto-detect company name column
+            const autoIdx = headers.findIndex(h => {
+                const l = h.toLowerCase();
+                return l.includes('company') || l.includes('name') || l.includes('firm') || l.includes('business') || l.includes('organization') || l.includes('entity');
+            });
+            if (autoIdx >= 0) {
+                select.value = autoIdx;
+                state.companyNameColIndex = autoIdx;
+            }
+
+            renderImportPreview();
+            updateConfirmButton();
+            showToast(`Loaded ${rows.length} rows from ${file.name}`, 'success');
+        } catch (err) {
+            showToast(`Error reading file: ${err.message}`, 'error');
+        }
+    }
+
+    function renderImportPreview() {
+        const container = $('#importPreviewTable');
+        const headers = state.importedHeaders;
+        const rows = state.importedRows.slice(0, 50); // Preview first 50 rows
+
+        let html = '<table class="preview-table"><thead><tr>';
+        html += '<th>#</th>';
+        headers.forEach((h, i) => {
+            const highlight = i === state.companyNameColIndex ? ' style="background:var(--color-brand);color:#fff;"' : '';
+            html += `<th${highlight}>${escapeHtml(h)}</th>`;
+        });
+        html += '</tr></thead><tbody>';
+        rows.forEach((row, ri) => {
+            html += '<tr>';
+            html += `<td style="color:var(--text-tertiary);font-size:11px;">${ri + 1}</td>`;
+            headers.forEach((_, ci) => {
+                const val = row[ci] != null ? String(row[ci]) : '';
+                const highlight = ci === state.companyNameColIndex ? ' style="font-weight:600;color:var(--color-brand);"' : '';
+                html += `<td${highlight}>${escapeHtml(val)}</td>`;
+            });
+            html += '</tr>';
+        });
+        html += '</tbody></table>';
+        if (state.importedRows.length > 50) {
+            html += `<div style="padding:8px;text-align:center;font-size:12px;color:var(--text-tertiary);">Showing first 50 of ${state.importedRows.length} rows</div>`;
+        }
+        container.innerHTML = html;
+    }
+
+    function updateConfirmButton() {
+        const btn = $('#btnConfirmImport');
+        const valid = state.companyNameColIndex >= 0 && state.importedRows.length > 0;
+        btn.disabled = !valid;
+        $('#confirmImportCount').textContent = valid ? state.importedRows.length : 0;
+    }
+
+    function confirmImport() {
+        if (state.companyNameColIndex < 0 || state.importedRows.length === 0) return;
+
+        const headers = state.importedHeaders;
+        const nameCol = state.companyNameColIndex;
+        const newCompanies = [];
+
+        state.importedRows.forEach((row, idx) => {
+            const name = row[nameCol] != null ? String(row[nameCol]).trim() : '';
+            if (!name) return;
+
+            const originalData = {};
+            headers.forEach((h, ci) => {
+                if (ci !== nameCol && row[ci] != null && String(row[ci]).trim()) {
+                    originalData[h] = String(row[ci]).trim();
+                }
+            });
+
+            newCompanies.push({
+                id: generateId(),
+                name: name,
+                originalData: originalData,
+                enrichedData: {},
+                enrichStatus: 'pending', // pending | enriched | failed
+                enrichCallId: null,
+                importedAt: new Date().toISOString(),
+                enrichedAt: null,
+                source: state.importFileName
+            });
+        });
+
+        // Append to existing companies
+        state.companies = state.companies.concat(newCompanies);
+        saveCompanies();
+
+        // Record import history
+        state.importHistory.unshift({
+            id: generateId(),
+            fileName: state.importFileName,
+            rowCount: newCompanies.length,
+            time: new Date().toISOString()
+        });
+        if (state.importHistory.length > 20) state.importHistory = state.importHistory.slice(0, 20);
+        localStorage.setItem('bf_import_history', JSON.stringify(state.importHistory));
+
+        clearImportStaging();
+        renderRecentImports();
+        showToast(`Imported ${newCompanies.length} companies from ${state.importFileName}`, 'success');
+    }
+
+    function clearImportStaging() {
+        state.importedHeaders = [];
+        state.importedRows = [];
+        state.companyNameColIndex = -1;
+        state.importFileName = '';
+        $('#importPreviewSection').style.display = 'none';
+        $('#importPreviewTable').innerHTML = '';
+        $('#companyNameColumn').innerHTML = '<option value="">-- Select the column containing company names --</option>';
+    }
+
+    function renderRecentImports() {
+        const container = $('#recentImports');
+        if (state.importHistory.length === 0) {
+            container.innerHTML = '<div class="empty-state small"><i class="fas fa-clock"></i><p>No recent imports</p></div>';
+            return;
+        }
+        container.innerHTML = state.importHistory.slice(0, 10).map(h =>
+            `<div class="submission-item"><span class="submission-status status-dot connected"></span><div class="submission-info"><div class="submission-name">${escapeHtml(h.fileName)}</div><div class="submission-time">${getTimeAgo(h.time)} · ${h.rowCount} companies</div></div></div>`
+        ).join('');
+    }
+
+    // ============================================
+    // TAB 2: ENRICH DATA
+    // ============================================
+    function initEnrichTab() {
+        $('#btnSelectAllEnrich').addEventListener('click', () => {
+            state.companies.filter(c => c.enrichStatus !== 'enriched').forEach(c => state.selectedForEnrich.add(c.id));
+            renderEnrichCompanyList();
+            updateEnrichButton();
+        });
+        $('#btnDeselectAllEnrich').addEventListener('click', () => {
+            state.selectedForEnrich.clear();
+            renderEnrichCompanyList();
+            updateEnrichButton();
+        });
+        $('#btnStartEnrichment').addEventListener('click', startEnrichment);
+        $('#btnStopEnrichment').addEventListener('click', () => { state.enrichAbort = true; });
+    }
+
+    function renderEnrichCompanyList() {
+        const container = $('#enrichCompanyList');
+        if (state.companies.length === 0) {
+            container.innerHTML = '<div class="empty-state small"><i class="fas fa-file-import"></i><p>No companies imported yet. Go to Import tab first.</p></div>';
+            updateEnrichButton();
+            return;
+        }
+
+        container.innerHTML = state.companies.map(c => {
+            const checked = state.selectedForEnrich.has(c.id) ? 'checked' : '';
+            const sel = state.selectedForEnrich.has(c.id) ? 'selected' : '';
+            const statusBadge = getEnrichStatusBadge(c.enrichStatus);
+            const existingKeys = Object.keys(c.originalData).slice(0, 3).join(', ');
+            return `<div class="export-selection-item ${sel}" data-id="${c.id}">
+                <input type="checkbox" ${checked} data-id="${c.id}">
+                <div style="flex:1;">
+                    <div style="font-weight:600;font-size:13px;">${escapeHtml(c.name)}</div>
+                    <div style="font-size:11px;color:var(--text-tertiary);">${existingKeys ? 'Has: ' + escapeHtml(existingKeys) + (Object.keys(c.originalData).length > 3 ? '...' : '') : 'No existing data'} · ${statusBadge}</div>
+                </div>
+            </div>`;
         }).join('');
-        container.querySelectorAll('.file-remove').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                state.fileQueue = state.fileQueue.filter(f => f.id !== btn.dataset.id);
-                renderFileQueue();
-                updateSubmitButton();
+
+        container.querySelectorAll('.export-selection-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const id = item.dataset.id;
+                if (state.selectedForEnrich.has(id)) state.selectedForEnrich.delete(id);
+                else state.selectedForEnrich.add(id);
+                renderEnrichCompanyList();
+                updateEnrichButton();
             });
         });
+
+        updateEnrichButton();
     }
 
-    function updateSubmitButton() {
-        $('#btnSubmitExtraction').disabled = state.fileQueue.length === 0;
+    function updateEnrichButton() {
+        const btn = $('#btnStartEnrichment');
+        btn.disabled = state.selectedForEnrich.size === 0 || state.enrichRunning;
+        if (!state.enrichRunning) {
+            btn.innerHTML = `<i class="fas fa-rocket"></i> Start Enrichment (${state.selectedForEnrich.size})`;
+        }
     }
 
-    /**
-     * Submit files for extraction.
-     * Flow: Upload → Extract (Scan/QnA/LLM/Bot) → Auto-poll Status
-     */
-    async function submitForExtraction() {
-        const files = state.fileQueue;
-        if (files.length === 0) return;
+    function getSelectedEnrichFields() {
+        return Array.from($$('.enrich-field-check:checked')).map(cb => cb.value);
+    }
+
+    async function startEnrichment() {
+        if (state.selectedForEnrich.size === 0) return;
         if (!client.isConfigured()) {
-            showToast('Please configure REST_API_ENDPOINT and API_TOKEN in the Configuration tab first.', 'warning');
+            showToast('Please configure API credentials in the Configuration tab first.', 'warning');
             return;
         }
-        const docType = $('#docTypeSelect').value;
-        const entity = $('#entityName').value;
-        const period = $('#reportingPeriod').value;
-        const btn = $('#btnSubmitExtraction');
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span> Processing...';
 
-        // Show status polling section
-        const pollSection = $('#statusPollSection');
-        const pollLog = $('#statusPollLog');
-        pollSection.style.display = 'block';
+        state.enrichRunning = true;
+        state.enrichAbort = false;
+        const btn = $('#btnStartEnrichment');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Enriching...';
+        $('#btnStopEnrichment').style.display = 'block';
+        $('#enrichProgressBadge').textContent = 'Running...';
+        $('#enrichProgressBadge').className = 'badge info';
+
+        const fields = getSelectedEnrichFields();
+        const customInstructions = $('#enrichCustomPrompt')?.value?.trim() || '';
+        const pollLog = $('#enrichPollLog');
         pollLog.innerHTML = '';
 
-        function addPollLogEntry(icon, text, cls) {
-            const entry = document.createElement('div');
-            entry.className = 'status-poll-entry' + (cls ? ' ' + cls : '');
-            entry.innerHTML = `<i class="fas ${icon}"></i> <span>${text}</span> <span class="poll-time">${new Date().toLocaleTimeString()}</span>`;
-            pollLog.appendChild(entry);
-            pollLog.scrollTop = pollLog.scrollHeight;
-        }
+        const companiesToEnrich = state.companies.filter(c => state.selectedForEnrich.has(c.id));
+        let successCount = 0;
+        let failCount = 0;
 
-        for (const fileItem of files) {
-            fileItem.status = 'uploading';
-            let callId = null;
-            const docId = generateDocumentId(fileItem.name);
+        for (let i = 0; i < companiesToEnrich.length; i++) {
+            if (state.enrichAbort) {
+                addEnrichLog('fa-stop', `Enrichment stopped by user after ${i} companies.`, 'poll-warning');
+                break;
+            }
+
+            const company = companiesToEnrich[i];
+            addEnrichLog('fa-building', `[${i + 1}/${companiesToEnrich.length}] Enriching: ${company.name}...`, '');
 
             try {
-                // ── Step 1: Extract text from file client-side ──
-                addPollLogEntry('fa-file-export', `Extracting text from ${fileItem.name}...`, '');
-                let fileText = await client.fileToText(fileItem.file);
+                // Build the enrichment prompt
+                const existingDataStr = Object.keys(company.originalData).length > 0
+                    ? '\nExisting data: ' + Object.entries(company.originalData).map(([k, v]) => `${k}: ${v}`).join(', ')
+                    : '';
 
-                // Truncate very large documents to avoid API limits
-                const MAX_CHARS = 100000;
-                if (fileText.length > MAX_CHARS) {
-                    addPollLogEntry('fa-exclamation-triangle', `Document text is ${fileText.length} chars — truncating to ${MAX_CHARS}`, 'poll-warning');
-                    fileText = fileText.substring(0, MAX_CHARS);
+                const fieldsStr = fields.map(f => f.replace(/_/g, ' ')).join(', ');
+
+                const message = `You are a company research assistant. Please enrich the following private company with additional data points.
+
+Company Name: ${company.name}${existingDataStr}
+
+Please provide the following data points: ${fieldsStr}.
+
+Return your response as a JSON object with these exact keys: ${fields.join(', ')}.
+For each field, provide the best available information. If a field is unknown, set its value to null.
+Only return the JSON object, no other text.${customInstructions ? '\n\nAdditional instructions: ' + customInstructions : ''}`;
+
+                // Send bot request
+                const postResult = await client.sendBotRequest(message);
+
+                if (!postResult.ok) {
+                    throw new Error(`API error: ${postResult.status} ${postResult.statusText}`);
                 }
 
-                addPollLogEntry('fa-check-circle', `Text extracted (${fileText.length} chars). Sending LLM request...`, 'poll-success');
+                const callId = client._extractCallId(postResult.data);
+                company.enrichCallId = callId;
 
-                // ── Step 2: POST /functions/llm with text in prompt ──
-                const customInstructions = $('#customPromptInput')?.value?.trim() || '';
-                const prompt = `Analyze and extract all financial metrics from the following ${formatDocType(docType)}.` +
-                    (entity ? ` Entity: ${entity}.` : '') +
-                    (period ? ` Period: ${period}.` : '') +
-                    ` Map each extracted value to the appropriate financial statement line item using these categories:\n` +
-                    `Balance Sheet: Cash & Equivalents, Accounts Receivable, Inventory, Other Current Assets, PP&E (Net), Intangibles & Goodwill, Other Non-Current Assets, Total Assets, Accounts Payable, Accrued Expenses, Short-Term Debt, Other Current Liabilities, Long-Term Debt, Other Non-Current Liabilities, Total Liabilities, Owner's Equity / Retained Earnings, Total Liabilities & Equity.\n` +
-                    `Income Statement: Revenue, COGS, Gross Profit, SG&A, D&A, Other Operating Expenses, Operating Income (EBIT), Interest Expense, Other Income / (Expense), Pre-Tax Income, Tax Expense, Net Income.\n` +
-                    `Cash Flow: Net Income, D&A Add-Back, Changes in Working Capital, Cash from Operations (CFO), CapEx, Acquisitions / Divestitures, Cash from Investing (CFI), Debt Issuance / Repayment, Equity Issuance / Distributions, Cash from Financing (CFF), Net Change in Cash.\n` +
-                    `Return as a JSON array where each item has: { "field": "<internal line item>", "statement": "BS|IS|CF", "category": "<category>", "value": <number or string>, "period": "<period>", "source_label": "<original label from document>" }.\n` +
-                    `Flag any items that don't map to the above schema as "UNMAPPED".` +
-                    (customInstructions ? `\n\nAdditional instructions: ${customInstructions}` : '') +
-                    `\n\n--- Document Content ---\n${fileText}`;
+                if (callId) {
+                    addEnrichLog('fa-satellite-dish', `Polling status for ${company.name} (call_id: ${callId})...`, 'poll-info');
 
-                const extractResult = await client.sendLLMRequest(prompt, '', {
-                    temperature: 0.2,
-                    max_tokens: 4096
-                });
+                    const statusResult = await client.pollStatus(callId, (update) => {
+                        addEnrichLog('fa-sync-alt', `${company.name}: Poll #${update.attempt} — ${update.status || 'pending'}`, 'poll-info');
+                    });
 
-                let extractionOutput = null;
+                    if (statusResult && (statusResult.ok || statusResult.data?.output != null)) {
+                        const output = statusResult.data?.output;
+                        const enriched = parseEnrichmentOutput(output);
 
-                if (extractResult && extractResult.ok) {
-                    callId = client._extractCallId(extractResult.data);
-                    addPollLogEntry('fa-check-circle', `LLM request accepted. call_id: ${callId || 'none'}`, 'poll-success');
-
-                    // ── Step 3: Poll GET /output/{id} until complete ──
-                    if (callId) {
-                        addPollLogEntry('fa-satellite-dish', `Polling status for call_id: ${callId}...`, 'poll-info');
-                        $('#statusPollBadge').textContent = 'Polling...';
-                        $('#statusPollBadge').className = 'status-poll-badge polling';
-
-                        const statusResult = await client.pollStatus(callId, (update) => {
-                            addPollLogEntry('fa-sync-alt', `Status poll #${update.attempt}: ${update.status || 'pending'}`, 'poll-info');
-                            $('#statusPollBadge').textContent = `Poll #${update.attempt}: ${update.status || 'pending'}`;
-                        });
-
-                        if (statusResult && (statusResult.ok || statusResult.data?.output != null)) {
-                            const finalStatus = statusResult.data?.status || 'unknown';
-                            extractionOutput = statusResult.data?.output;
-                            const hasOutput = extractionOutput != null;
-                            addPollLogEntry('fa-flag-checkered', `Final status: ${finalStatus}${hasOutput ? ' (output received)' : ''}`, ['completed', 'complete', 'success', 'done'].includes(finalStatus.toLowerCase()) || hasOutput ? 'poll-success' : 'poll-warning');
-                            $('#statusPollBadge').textContent = finalStatus;
-                            $('#statusPollBadge').className = 'status-poll-badge ' + (['completed', 'complete', 'success', 'done'].includes(finalStatus.toLowerCase()) || hasOutput ? 'completed' : 'failed');
-
-                            if (hasOutput) {
-                                addPollLogEntry('fa-database', `Output captured for review.`, 'poll-success');
-                            }
+                        if (enriched && Object.keys(enriched).length > 0) {
+                            company.enrichedData = enriched;
+                            company.enrichStatus = 'enriched';
+                            company.enrichedAt = new Date().toISOString();
+                            successCount++;
+                            addEnrichLog('fa-check-circle', `${company.name}: Enriched successfully (${Object.keys(enriched).length} fields)`, 'poll-success');
                         } else {
-                            addPollLogEntry('fa-times-circle', `Polling ended: ${statusResult?.statusText || 'timeout'}`, 'poll-error');
-                            $('#statusPollBadge').textContent = 'Timeout';
-                            $('#statusPollBadge').className = 'status-poll-badge failed';
+                            company.enrichStatus = 'failed';
+                            failCount++;
+                            addEnrichLog('fa-exclamation-triangle', `${company.name}: Could not parse enrichment data`, 'poll-warning');
                         }
                     } else {
-                        addPollLogEntry('fa-info-circle', 'No call_id returned — skipping status poll', 'poll-warning');
+                        company.enrichStatus = 'failed';
+                        failCount++;
+                        addEnrichLog('fa-times-circle', `${company.name}: Polling timeout or error`, 'poll-error');
                     }
                 } else {
-                    addPollLogEntry('fa-times-circle', `Request failed: ${extractResult?.status} ${extractResult?.statusText}`, 'poll-error');
-                }
-
-                fileItem.status = extractionOutput != null ? 'success' : (callId ? 'processing' : 'error');
-                addExtractionRecord(fileItem, docId, callId, 'llm', extractionOutput);
-            } catch (err) {
-                fileItem.status = 'error';
-                addPollLogEntry('fa-times-circle', `Error: ${fileItem.name} — ${err.message}`, 'poll-error');
-                showToast(`Error: ${fileItem.name} — ${err.message}`, 'error');
-                addExtractionRecord(fileItem, docId, null, 'llm', null);
-            }
-        }
-
-        $('#statusPollBadge').textContent = 'Complete';
-        $('#statusPollBadge').className = 'status-poll-badge completed';
-
-        const submission = {
-            id: generateId(),
-            files: files.map(f => f.name),
-            docType, entity, period, method: 'llm',
-            time: new Date().toISOString(),
-            status: files.every(f => f.status === 'success') ? 'completed' : 'partial'
-        };
-        state.submissions.unshift(submission);
-        if (state.submissions.length > 50) state.submissions = state.submissions.slice(0, 50);
-        localStorage.setItem('bf_submissions', JSON.stringify(state.submissions));
-
-        state.fileQueue = [];
-        renderFileQueue();
-        renderRecentSubmissions();
-        renderReviewGrid();
-        renderExportSelections();
-        updateSubmitButton();
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-rocket"></i> Submit for Extraction';
-        showToast('All documents submitted for extraction!', 'success');
-    }
-
-    function addExtractionRecord(fileItem, docId, callId, method, apiOutput) {
-        const parsed = parseExtractionOutput(apiOutput);
-        const statusMap = { success: 'completed', processing: 'processing', error: 'failed' };
-        state.extractions.unshift({
-            id: generateId(), documentId: docId, callId, extractionMethod: method,
-            fileName: fileItem.name, fileType: fileItem.type, fileSize: fileItem.size,
-            docType: $('#docTypeSelect').value,
-            entity: $('#entityName').value || 'Unknown Entity',
-            period: $('#reportingPeriod').value || 'N/A',
-            status: statusMap[fileItem.status] || 'failed',
-            confidence: parsed.confidence,
-            datapoints: parsed.datapoints,
-            datapointCount: parsed.datapoints.length,
-            rawOutput: apiOutput,
-            submittedBy: client.name || client.userId || client.email || 'User',
-            userId: client.userId,
-            createdAt: new Date().toISOString(),
-            completedAt: fileItem.status === 'success' ? new Date().toISOString() : null
-        });
-        localStorage.setItem('bf_extractions', JSON.stringify(state.extractions));
-    }
-
-    function renderRecentSubmissions() {
-        const container = $('#recentSubmissions');
-        if (state.submissions.length === 0) {
-            container.innerHTML = '<div class="empty-state small"><i class="fas fa-clock"></i><p>No recent submissions</p></div>';
-            return;
-        }
-        container.innerHTML = state.submissions.slice(0, 10).map(s => {
-            const sc = s.status === 'completed' ? 'connected' : 'connecting';
-            return `<div class="submission-item"><span class="submission-status status-dot ${sc}"></span><div class="submission-info"><div class="submission-name">${s.files.join(', ')}</div><div class="submission-time">${getTimeAgo(s.time)} · ${{ scan: 'Scan', qna: 'QnA', llm: 'LLM', bot: 'Bot' }[s.method] || 'Scan'} · ${s.entity || 'No entity'}</div></div></div>`;
-        }).join('');
-    }
-
-    // ============================================
-    // REVIEW TAB
-    // ============================================
-    function initReviewTab() {
-        $('#reviewSearch').addEventListener('input', renderReviewGrid);
-        $('#reviewStatusFilter').addEventListener('change', renderReviewGrid);
-        $('#reviewTypeFilter').addEventListener('change', renderReviewGrid);
-        $('#btnRefreshExtractions').addEventListener('click', async () => {
-            showToast('Refreshing...', 'info');
-            await pollExtractionStatuses();
-            renderReviewGrid();
-        });
-        $('#btnCloseDetail').addEventListener('click', closeDetailPanel);
-        $$('.detail-tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-                $$('.detail-tab').forEach(t => t.classList.remove('active'));
-                tab.classList.add('active');
-                renderDetailContent(tab.dataset.detail);
-            });
-        });
-        $('#btnApproveExtraction').addEventListener('click', () => {
-            if (state.currentExtraction) {
-                state.currentExtraction.status = 'approved';
-                saveExtractions();
-                renderReviewGrid();
-                renderExportSelections();
-                showToast('Extraction approved!', 'success');
-                closeDetailPanel();
-            }
-        });
-        $('#btnReprocess').addEventListener('click', async () => {
-            if (state.currentExtraction) {
-                const ext = state.currentExtraction;
-                showToast('Reprocessing...', 'info');
-                try {
-                    const r = await client.sendScanRequest(ext.documentId, ext.docType);
-                    const newCallId = client._extractCallId(r.data);
-                    if (newCallId) {
-                        ext.callId = newCallId;
-                        showToast(`Reprocess submitted. call_id: ${newCallId}. Auto-polling status...`, 'info');
-                        // Auto-poll status for the reprocess
-                        const statusResult = await client.pollStatus(newCallId);
-                        if (statusResult && statusResult.ok) {
-                            const s = statusResult.data?.status || '';
-                            if (['completed', 'success', 'done'].includes(s.toLowerCase())) {
-                                ext.status = 'completed';
-                                ext.completedAt = new Date().toISOString();
-                                showToast('Reprocess completed!', 'success');
-                            } else {
-                                ext.status = 'processing';
-                                showToast(`Reprocess status: ${s}`, 'info');
-                            }
+                    // Try to parse inline response
+                    const inlineOutput = postResult.data?.output || postResult.data?.message || postResult.data?.text || postResult.data?.response;
+                    if (inlineOutput) {
+                        const enriched = parseEnrichmentOutput(inlineOutput);
+                        if (enriched && Object.keys(enriched).length > 0) {
+                            company.enrichedData = enriched;
+                            company.enrichStatus = 'enriched';
+                            company.enrichedAt = new Date().toISOString();
+                            successCount++;
+                            addEnrichLog('fa-check-circle', `${company.name}: Enriched from inline response`, 'poll-success');
+                        } else {
+                            company.enrichStatus = 'failed';
+                            failCount++;
+                            addEnrichLog('fa-exclamation-triangle', `${company.name}: No call_id and could not parse inline response`, 'poll-warning');
                         }
                     } else {
-                        ext.status = 'processing';
+                        company.enrichStatus = 'failed';
+                        failCount++;
+                        addEnrichLog('fa-info-circle', `${company.name}: No call_id returned`, 'poll-warning');
                     }
-                    saveExtractions();
-                    renderReviewGrid();
-                } catch (e) {
-                    showToast(`Reprocess failed: ${e.message}`, 'error');
+                }
+
+                saveCompanies();
+            } catch (err) {
+                company.enrichStatus = 'failed';
+                failCount++;
+                addEnrichLog('fa-times-circle', `${company.name}: Error — ${err.message}`, 'poll-error');
+                saveCompanies();
+            }
+        }
+
+        // Done
+        state.enrichRunning = false;
+        state.enrichAbort = false;
+        state.selectedForEnrich.clear();
+        btn.disabled = false;
+        btn.innerHTML = `<i class="fas fa-rocket"></i> Start Enrichment (0)`;
+        $('#btnStopEnrichment').style.display = 'none';
+        $('#enrichProgressBadge').textContent = `Done: ${successCount} enriched, ${failCount} failed`;
+        $('#enrichProgressBadge').className = failCount === 0 ? 'badge success' : 'badge warning';
+        addEnrichLog('fa-flag-checkered', `Enrichment complete. ${successCount} enriched, ${failCount} failed.`, 'poll-success');
+        renderEnrichCompanyList();
+        showToast(`Enrichment complete: ${successCount} enriched, ${failCount} failed`, successCount > 0 ? 'success' : 'warning');
+    }
+
+    function addEnrichLog(icon, text, cls) {
+        const log = $('#enrichPollLog');
+        const entry = document.createElement('div');
+        entry.className = 'status-poll-entry' + (cls ? ' ' + cls : '');
+        entry.innerHTML = `<i class="fas ${icon}"></i> <span>${text}</span> <span class="poll-time">${new Date().toLocaleTimeString()}</span>`;
+        log.appendChild(entry);
+        log.scrollTop = log.scrollHeight;
+    }
+
+    function parseEnrichmentOutput(output) {
+        if (output == null) return null;
+        let data = output;
+
+        if (typeof data === 'string') {
+            data = extractJsonFromString(data);
+            if (data === null) return null;
+        }
+
+        // If it's a plain object with enrichment fields, return it
+        if (data && typeof data === 'object' && !Array.isArray(data)) {
+            // Filter out meta fields
+            const skip = ['status', 'id', 'call_id', 'user_id', 'metadata', 'error', 'quota', 'session_id'];
+            const result = {};
+            for (const [k, v] of Object.entries(data)) {
+                if (!skip.includes(k) && v != null) {
+                    result[k] = v;
                 }
             }
+            // Check for nested message/text/response
+            if (Object.keys(result).length <= 2 && (data.message || data.text || data.response)) {
+                const inner = extractJsonFromString(String(data.message || data.text || data.response));
+                if (inner && typeof inner === 'object' && !Array.isArray(inner)) return inner;
+            }
+            return Object.keys(result).length > 0 ? result : null;
+        }
+
+        return null;
+    }
+
+    function getEnrichStatusBadge(status) {
+        const m = {
+            enriched: '<span class="badge success">Enriched</span>',
+            pending: '<span class="badge">Pending</span>',
+            failed: '<span class="badge danger">Failed</span>'
+        };
+        return m[status] || '<span class="badge">Unknown</span>';
+    }
+
+    // ============================================
+    // TAB 3: VISUALIZE & EXPORT
+    // ============================================
+    function initVisualizeTab() {
+        $('#vizSearch').addEventListener('input', renderVisualizeTable);
+        $('#vizStatusFilter').addEventListener('change', renderVisualizeTable);
+        $('#btnExportExcel').addEventListener('click', () => exportCompanies('xlsx'));
+        $('#btnExportCsv').addEventListener('click', () => exportCompanies('csv'));
+        $('#btnExportJson').addEventListener('click', () => exportCompanies('json'));
+        $('#btnCloseCompanyDetail').addEventListener('click', () => {
+            $('#companyDetailPanel').classList.remove('open');
+            state.companyDetailOpen = false;
+            state.currentCompany = null;
         });
     }
 
-    function renderReviewGrid() {
-        const search = ($('#reviewSearch')?.value || '').toLowerCase();
-        const statusFilter = $('#reviewStatusFilter')?.value || 'all';
-        const typeFilter = $('#reviewTypeFilter')?.value || 'all';
-        let filtered = state.extractions.filter(ext => {
-            if (search && !ext.fileName.toLowerCase().includes(search) && !ext.entity.toLowerCase().includes(search)) return false;
-            if (statusFilter !== 'all' && ext.status !== statusFilter) return false;
-            if (typeFilter !== 'all' && ext.docType !== typeFilter) return false;
+    function renderVisualizeTable() {
+        const container = $('#vizTableContainer');
+        const search = ($('#vizSearch')?.value || '').toLowerCase();
+        const statusFilter = $('#vizStatusFilter')?.value || 'all';
+
+        let filtered = state.companies.filter(c => {
+            if (search && !c.name.toLowerCase().includes(search)) {
+                // Also search in original and enriched data
+                const allVals = Object.values(c.originalData).concat(Object.values(c.enrichedData)).join(' ').toLowerCase();
+                if (!allVals.includes(search)) return false;
+            }
+            if (statusFilter !== 'all' && c.enrichStatus !== statusFilter) return false;
             return true;
         });
-        const grid = $('#extractionsGrid');
+
+        $('#vizCompanyCount').textContent = `${filtered.length} companies`;
+
         if (filtered.length === 0) {
-            grid.innerHTML = '<div class="empty-state"><i class="fas fa-database"></i><h3>No Extractions Found</h3><p>Upload documents to begin extracting financial data</p><button class="btn btn-primary" data-goto="upload"><i class="fas fa-upload"></i> Upload Documents</button></div>';
+            container.innerHTML = '<div class="empty-state"><i class="fas fa-table"></i><h3>No Company Data</h3><p>Import and enrich companies to see them here</p><button class="btn btn-primary" data-goto="import"><i class="fas fa-file-import"></i> Import Companies</button></div>';
             return;
         }
-        grid.innerHTML = filtered.map(ext => {
-            const ml = { scan: 'Scan', qna: 'QnA', llm: 'LLM', bot: 'Bot' }[ext.extractionMethod] || 'LLM';
-            return `<div class="extraction-card" data-id="${ext.id}"><div class="extraction-card-header"><h4 title="${ext.fileName}">${ext.fileName}</h4><div class="extraction-card-actions">${getStatusBadge(ext.status)}<button class="btn-icon btn-delete-extraction" data-id="${ext.id}" title="Delete extraction"><i class="fas fa-trash-alt"></i></button></div></div><div class="extraction-meta"><span><i class="fas fa-building"></i> ${ext.entity}</span><span><i class="fas fa-calendar"></i> ${ext.period}</span><span><i class="fas fa-clock"></i> ${getTimeAgo(ext.createdAt)}</span><span><i class="fas fa-cog"></i> ${ml}</span></div><div class="extraction-stats"><div class="extraction-stat"><div class="stat-value">${ext.datapointCount}</div><div class="stat-label">Datapoints</div></div><div class="extraction-stat"><div class="stat-value">${ext.confidence}%</div><div class="stat-label">Confidence</div></div><div class="extraction-stat"><div class="stat-value">${ext.fileType?.toUpperCase()}</div><div class="stat-label">Format</div></div></div></div>`;
-        }).join('');
-        grid.querySelectorAll('.extraction-card').forEach(card => {
-            card.addEventListener('click', (e) => {
-                if (e.target.closest('.btn-delete-extraction')) return;
-                const ext = state.extractions.find(e => e.id === card.dataset.id);
-                if (ext) openDetailPanel(ext);
+
+        // Gather all unique column keys
+        const colSet = new Set();
+        filtered.forEach(c => {
+            Object.keys(c.originalData).forEach(k => colSet.add(k));
+            Object.keys(c.enrichedData).forEach(k => colSet.add(k));
+        });
+        const columns = Array.from(colSet);
+
+        let html = '<table class="preview-table"><thead><tr>';
+        html += '<th style="position:sticky;left:0;z-index:2;background:var(--bg-card);">#</th>';
+        html += '<th style="position:sticky;left:30px;z-index:2;background:var(--bg-card);min-width:180px;">Company Name</th>';
+        html += '<th>Status</th>';
+        columns.forEach(col => {
+            html += `<th>${escapeHtml(col)}</th>`;
+        });
+        html += '</tr></thead><tbody>';
+
+        filtered.forEach((c, idx) => {
+            const statusBadge = getEnrichStatusBadge(c.enrichStatus);
+            html += `<tr class="viz-company-row" data-id="${c.id}" style="cursor:pointer;">`;
+            html += `<td style="position:sticky;left:0;background:var(--bg-card);font-size:11px;color:var(--text-tertiary);">${idx + 1}</td>`;
+            html += `<td style="position:sticky;left:30px;background:var(--bg-card);font-weight:600;">${escapeHtml(c.name)}</td>`;
+            html += `<td>${statusBadge}</td>`;
+            columns.forEach(col => {
+                // Enriched data takes priority, fall back to original
+                const val = c.enrichedData[col] != null ? c.enrichedData[col] : (c.originalData[col] || '');
+                const displayVal = typeof val === 'object' ? JSON.stringify(val) : String(val);
+                const isEnriched = c.enrichedData[col] != null;
+                const style = isEnriched ? 'color:var(--color-brand);' : '';
+                html += `<td style="${style}">${escapeHtml(displayVal)}</td>`;
+            });
+            html += '</tr>';
+        });
+        html += '</tbody></table>';
+        container.innerHTML = html;
+
+        // Click row to open detail
+        container.querySelectorAll('.viz-company-row').forEach(row => {
+            row.addEventListener('click', () => {
+                const company = state.companies.find(c => c.id === row.dataset.id);
+                if (company) openCompanyDetail(company);
             });
         });
-        grid.querySelectorAll('.btn-delete-extraction').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                if (confirm('Delete this extraction?')) deleteExtraction(btn.dataset.id);
+    }
+
+    function openCompanyDetail(company) {
+        state.currentCompany = company;
+        state.companyDetailOpen = true;
+        $('#companyDetailTitle').textContent = company.name;
+        $('#companyDetailPanel').classList.add('open');
+
+        let html = '<div class="summary-grid">';
+        html += `<div class="summary-item"><label>Company Name</label><div class="value">${escapeHtml(company.name)}</div></div>`;
+        html += `<div class="summary-item"><label>Status</label><div class="value">${getEnrichStatusBadge(company.enrichStatus)}</div></div>`;
+        html += `<div class="summary-item"><label>Source File</label><div class="value">${escapeHtml(company.source || '—')}</div></div>`;
+        html += `<div class="summary-item"><label>Imported</label><div class="value">${company.importedAt ? new Date(company.importedAt).toLocaleString() : '—'}</div></div>`;
+        html += `<div class="summary-item"><label>Enriched</label><div class="value">${company.enrichedAt ? new Date(company.enrichedAt).toLocaleString() : '—'}</div></div>`;
+        if (company.enrichCallId) {
+            html += `<div class="summary-item"><label>Call ID</label><div class="value text-muted" style="font-size:11px;word-break:break-all;">${company.enrichCallId}</div></div>`;
+        }
+        html += '</div>';
+
+        // Original data
+        if (Object.keys(company.originalData).length > 0) {
+            html += '<h4 style="margin:16px 0 8px;"><i class="fas fa-file-import"></i> Original Data</h4>';
+            html += '<table class="preview-table"><tbody>';
+            Object.entries(company.originalData).forEach(([k, v]) => {
+                html += `<tr><td style="font-weight:600;width:200px;">${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`;
             });
+            html += '</tbody></table>';
+        }
+
+        // Enriched data
+        if (Object.keys(company.enrichedData).length > 0) {
+            html += '<h4 style="margin:16px 0 8px;color:var(--color-brand);"><i class="fas fa-magic"></i> Enriched Data</h4>';
+            html += '<table class="preview-table"><tbody>';
+            Object.entries(company.enrichedData).forEach(([k, v]) => {
+                const displayVal = typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v ?? '—');
+                html += `<tr><td style="font-weight:600;width:200px;color:var(--color-brand);">${escapeHtml(k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()))}</td><td>${escapeHtml(displayVal)}</td></tr>`;
+            });
+            html += '</tbody></table>';
+        }
+
+        // Delete button
+        html += `<div style="margin-top:20px;"><button class="btn btn-danger btn-sm" id="btnDeleteCompany"><i class="fas fa-trash"></i> Delete Company</button></div>`;
+
+        $('#companyDetailBody').innerHTML = html;
+
+        $('#btnDeleteCompany')?.addEventListener('click', () => {
+            if (confirm(`Delete "${company.name}"?`)) {
+                state.companies = state.companies.filter(c => c.id !== company.id);
+                saveCompanies();
+                $('#companyDetailPanel').classList.remove('open');
+                renderVisualizeTable();
+                renderEnrichCompanyList();
+                showToast('Company deleted', 'info');
+            }
         });
     }
 
-    function openDetailPanel(ext) {
-        state.currentExtraction = ext;
-        state.detailOpen = true;
-        $('#detailTitle').textContent = ext.fileName;
-        $('#detailPanel').classList.add('open');
-        $$('.detail-tab').forEach(t => t.classList.toggle('active', t.dataset.detail === 'summary'));
-        renderDetailContent('summary');
-    }
+    function exportCompanies(format) {
+        const search = ($('#vizSearch')?.value || '').toLowerCase();
+        const statusFilter = $('#vizStatusFilter')?.value || 'all';
 
-    function closeDetailPanel() {
-        state.detailOpen = false;
-        state.currentExtraction = null;
-        $('#detailPanel').classList.remove('open');
-    }
+        let filtered = state.companies.filter(c => {
+            if (search && !c.name.toLowerCase().includes(search)) return false;
+            if (statusFilter !== 'all' && c.enrichStatus !== statusFilter) return false;
+            return true;
+        });
 
-    function renderDetailContent(view) {
-        const ext = state.currentExtraction;
-        if (!ext) return;
-        const container = $('#detailContent');
-        const ml = { scan: 'Scan Request', qna: 'QnA Request', llm: 'LLM Request', bot: 'Bot Request' }[ext.extractionMethod] || 'Scan Request';
-        switch (view) {
-            case 'summary':
-                container.innerHTML = `<div class="summary-grid"><div class="summary-item"><label>Document</label><div class="value">${ext.fileName}</div></div><div class="summary-item"><label>Status</label><div class="value">${getStatusBadge(ext.status)}</div></div><div class="summary-item"><label>Entity</label><div class="value">${ext.entity}</div></div><div class="summary-item"><label>Period</label><div class="value">${ext.period}</div></div><div class="summary-item"><label>Doc Type</label><div class="value">${formatDocType(ext.docType)}</div></div><div class="summary-item"><label>Method</label><div class="value">${ml}</div></div><div class="summary-item"><label>Confidence</label><div class="value">${ext.confidence}%</div></div><div class="summary-item"><label>Datapoints</label><div class="value">${ext.datapointCount}</div></div><div class="summary-item"><label>File Size</label><div class="value">${formatFileSize(ext.fileSize)}</div></div><div class="summary-item"><label>User ID</label><div class="value text-muted" style="font-size:11px;">${ext.userId || '—'}</div></div><div class="summary-item"><label>Document ID</label><div class="value text-muted" style="font-size:11px;word-break:break-all;">${ext.documentId}</div></div><div class="summary-item"><label>Call ID</label><div class="value text-muted" style="font-size:11px;word-break:break-all;">${ext.callId || '—'}</div></div></div>${ext.callId ? '<button class="btn btn-secondary btn-sm mt-2" id="btnCheckCallStatus"><i class="fas fa-sync-alt"></i> Check Call Status</button>' : ''}`;
-                const bs = container.querySelector('#btnCheckCallStatus');
-                if (bs) bs.addEventListener('click', async () => {
-                    bs.disabled = true;
-                    bs.innerHTML = '<span class="spinner"></span> Checking...';
-                    const r = await client.getCallStatus(ext.callId);
-                    showToast(r.ok ? `Status: ${JSON.stringify(r.data).substring(0, 120)}` : `Error: ${r.statusText}`, r.ok ? 'info' : 'error');
-                    bs.disabled = false;
-                    bs.innerHTML = '<i class="fas fa-sync-alt"></i> Check Call Status';
-                });
-                break;
-            case 'mapped': {
-                const { mapped, unmapped, validationChecks } = classifyDatapoints(ext.datapoints || []);
-                container.innerHTML = renderMappedSchemaView(mapped, unmapped.length, validationChecks);
-                break;
-            }
-            case 'unmapped': {
-                const { unmapped } = classifyDatapoints(ext.datapoints || []);
-                container.innerHTML = renderUnmappedDatapoints(unmapped);
-                // Attach dropdown change handlers
-                container.querySelectorAll('.unmapped-remap-select').forEach(sel => {
-                    sel.addEventListener('change', () => {
-                        if (!sel.value || !ext) return;
-                        const idx = parseInt(sel.dataset.idx);
-                        const dp = unmapped[idx];
-                        const [stmt, field] = sel.value.split('||');
-                        const category = SCHEMA_MAP[stmt]?.items?.[field] || '—';
-                        // Update the datapoint in the extraction record
-                        const origLabel = dp.source_label || dp.label || dp.field || '';
-                        Object.assign(dp, { field, statement: stmt, category, source_label: origLabel });
-                        // Find and update in ext.datapoints
-                        const match = ext.datapoints.find(d =>
-                            (d.label || d.field || '') === (dp.label || dp.field || '') &&
-                            String(d.value) === String(dp.value));
-                        if (match) Object.assign(match, { field, statement: stmt, category, source_label: origLabel });
-                        saveExtractions();
-                        showToast(`Mapped "${origLabel}" → ${field} (${stmt})`, 'success');
-                        renderDetailContent('unmapped');
-                    });
-                });
-                break;
-            }
-            case 'raw':
-                // Show the raw API output if available, otherwise show the full extraction record
-                const rawData = ext.rawOutput != null ? ext.rawOutput : ext;
-                container.innerHTML = `<div class="json-display">${typeof rawData === 'string' ? escapeHtml(rawData) : JSON.stringify(rawData, null, 2)}</div>`;
-                break;
+        if (filtered.length === 0) {
+            showToast('No companies to export', 'warning');
+            return;
         }
-    }
 
-    async function pollExtractionStatuses() {
-        for (const ext of state.extractions) {
-            if (ext.callId && ext.status === 'processing') {
-                try {
-                    const r = await client.getCallStatus(ext.callId);
-                    if (r.ok && r.data) {
-                        const s = String(r.data.status || r.data.state || '').toLowerCase();
-                        if (['completed', 'success', 'done'].includes(s)) {
-                            ext.status = 'completed';
-                            ext.completedAt = new Date().toISOString();
-                            showToast(`${ext.fileName} completed!`, 'success');
-                        } else if (['failed', 'error'].includes(s)) {
-                            ext.status = 'failed';
-                        }
-                    }
-                } catch (e) { /* swallow */ }
-            }
+        // Build flat rows with all columns
+        const colSet = new Set();
+        filtered.forEach(c => {
+            Object.keys(c.originalData).forEach(k => colSet.add(k));
+            Object.keys(c.enrichedData).forEach(k => colSet.add(k));
+        });
+        const columns = Array.from(colSet);
+
+        const rows = filtered.map(c => {
+            const row = { 'Company Name': c.name, 'Enrich Status': c.enrichStatus };
+            columns.forEach(col => {
+                const val = c.enrichedData[col] != null ? c.enrichedData[col] : (c.originalData[col] || '');
+                row[col] = typeof val === 'object' ? JSON.stringify(val) : val;
+            });
+            return row;
+        });
+
+        if (format === 'json') {
+            const content = JSON.stringify(rows, null, 2);
+            downloadFile(content, 'application/json', `blueflame-companies-${dateStamp()}.json`);
+            showToast('JSON exported', 'success');
+        } else if (format === 'csv') {
+            const allCols = ['Company Name', 'Enrich Status', ...columns];
+            let csv = allCols.map(c => `"${c}"`).join(',') + '\n';
+            rows.forEach(r => {
+                csv += allCols.map(c => `"${String(r[c] || '').replace(/"/g, '""')}"`).join(',') + '\n';
+            });
+            downloadFile(csv, 'text/csv', `blueflame-companies-${dateStamp()}.csv`);
+            showToast('CSV exported', 'success');
+        } else if (format === 'xlsx') {
+            // Use SheetJS to create a real Excel file
+            const allCols = ['Company Name', 'Enrich Status', ...columns];
+            const wsData = [allCols];
+            rows.forEach(r => {
+                wsData.push(allCols.map(c => r[c] || ''));
+            });
+            const ws = XLSX.utils.aoa_to_sheet(wsData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'Companies');
+            XLSX.writeFile(wb, `blueflame-companies-${dateStamp()}.xlsx`);
+            showToast('Excel file exported', 'success');
         }
-        saveExtractions();
-    }
-
-    function saveExtractions() {
-        localStorage.setItem('bf_extractions', JSON.stringify(state.extractions));
     }
 
     // ============================================
-    // EXPORT TAB
-    // ============================================
-    function initExportTab() {
-        $('#btnSelectAll').addEventListener('click', () => {
-            state.extractions.forEach(e => state.selectedExtractions.add(e.id));
-            renderExportSelections();
-            renderExportPreview();
-        });
-        $('#btnDeselectAll').addEventListener('click', () => {
-            state.selectedExtractions.clear();
-            renderExportSelections();
-            renderExportPreview();
-        });
-        $$('.export-format-selector .chip').forEach(chip => {
-            chip.addEventListener('click', () => {
-                $$('.export-format-selector .chip').forEach(c => c.classList.remove('active'));
-                chip.classList.add('active');
-                renderExportPreview();
-            });
-        });
-        $('#btnSendEmail').addEventListener('click', handleSendEmail);
-        $('#btnDownloadExport').addEventListener('click', handleDownloadExport);
-    }
-
-    function renderExportSelections() {
-        const container = $('#exportSelections');
-        const completed = state.extractions.filter(e => e.status === 'completed' || e.status === 'approved');
-        if (completed.length === 0) {
-            container.innerHTML = '<div class="empty-state small"><i class="fas fa-database"></i><p>No completed extractions available</p></div>';
-            return;
-        }
-        container.innerHTML = completed.map(ext => {
-            const checked = state.selectedExtractions.has(ext.id) ? 'checked' : '';
-            const sel = state.selectedExtractions.has(ext.id) ? 'selected' : '';
-            return `<div class="export-selection-item ${sel}" data-id="${ext.id}"><input type="checkbox" ${checked} data-id="${ext.id}"><div style="flex:1;"><div style="font-weight:600;font-size:12px;">${ext.fileName}</div><div style="font-size:11px;color:var(--text-tertiary);">${ext.entity} · ${ext.period} · ${ext.datapointCount} datapoints</div></div><button class="btn-icon btn-delete-export" data-id="${ext.id}" title="Delete extraction"><i class="fas fa-trash-alt"></i></button></div>`;
-        }).join('');
-        container.querySelectorAll('.export-selection-item').forEach(item => {
-            item.addEventListener('click', (e) => {
-                if (e.target.closest('.btn-delete-export')) return;
-                const id = item.dataset.id;
-                if (state.selectedExtractions.has(id)) state.selectedExtractions.delete(id);
-                else state.selectedExtractions.add(id);
-                renderExportSelections();
-                renderExportPreview();
-            });
-        });
-        container.querySelectorAll('.btn-delete-export').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                if (confirm('Delete this extraction?')) deleteExtraction(btn.dataset.id);
-            });
-        });
-    }
-
-    function renderExportPreview() {
-        const container = $('#exportPreview');
-        const format = document.querySelector('.export-format-selector .chip.active')?.dataset.format || 'table';
-        const selected = state.extractions.filter(e => state.selectedExtractions.has(e.id));
-        if (selected.length === 0) {
-            container.innerHTML = '<div class="empty-state small"><i class="fas fa-eye-slash"></i><p>Select extractions to preview</p></div>';
-            return;
-        }
-        const allDp = [];
-        selected.forEach(ext => {
-            (ext.datapoints || []).forEach(dp => {
-                allDp.push({ ...dp, entity: ext.entity, period: ext.period, document: ext.fileName });
-            });
-        });
-        switch (format) {
-            case 'table':
-                container.innerHTML = `<table class="preview-table"><thead><tr><th>Document</th><th>Entity</th><th>Field</th><th>Value</th><th>Confidence</th></tr></thead><tbody>${allDp.map(dp => `<tr><td>${dp.document}</td><td>${dp.entity}</td><td>${dp.label}</td><td style="font-weight:600;color:var(--color-brand)">${dp.value}</td><td>${dp.confidence}%</td></tr>`).join('')}</tbody></table>`;
-                break;
-            case 'json':
-                container.innerHTML = `<div class="json-display">${JSON.stringify(allDp, null, 2)}</div>`;
-                break;
-            case 'csv':
-                let csv = 'Document,Entity,Period,Field,Value,Confidence\n';
-                allDp.forEach(dp => { csv += `"${dp.document}","${dp.entity}","${dp.period}","${dp.label}","${dp.value}",${dp.confidence}\n`; });
-                container.innerHTML = `<div class="json-display">${csv}</div>`;
-                break;
-        }
-    }
-
-    async function handleSendEmail() {
-        const to = $('#emailTo').value;
-        if (!to) { showToast('Enter a recipient email', 'warning'); return; }
-        if (state.selectedExtractions.size === 0) { showToast('Select extractions to export', 'warning'); return; }
-        const btn = $('#btnSendEmail');
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span> Sending...';
-        const selected = state.extractions.filter(e => state.selectedExtractions.has(e.id));
-        try {
-            const result = await client.sendBotRequest(
-                `Send an email to ${to} with subject "${$('#emailSubject').value || 'Financial Data Extract'}" containing the extracted financial data. Format: ${$('#emailFormat').value}.`,
-                selected[0]?.documentId || ''
-            );
-            // Auto-poll status for the bot request
-            const callId = client._extractCallId(result.data);
-            if (callId) {
-                showToast(`Email request submitted. Polling status (call_id: ${callId})...`, 'info');
-                await client.pollStatus(callId);
-            }
-            showToast(`Email request sent to ${to}`, 'success');
-        } catch (e) {
-            showToast(`Email failed: ${e.message}`, 'error');
-        }
-        btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-paper-plane"></i> Send Email';
-    }
-
-    function handleDownloadExport() {
-        if (state.selectedExtractions.size === 0) { showToast('Select extractions to export', 'warning'); return; }
-        const format = document.querySelector('.export-format-selector .chip.active')?.dataset.format || 'json';
-        const selected = state.extractions.filter(e => state.selectedExtractions.has(e.id));
-        const allDp = [];
-        selected.forEach(ext => {
-            (ext.datapoints || []).forEach(dp => {
-                allDp.push({ document: ext.fileName, entity: ext.entity, period: ext.period, field: dp.label, value: dp.value, confidence: dp.confidence });
-            });
-        });
-        let content, mimeType, extension;
-        if (format === 'csv') {
-            content = 'Document,Entity,Period,Field,Value,Confidence\n';
-            allDp.forEach(dp => { content += `"${dp.document}","${dp.entity}","${dp.period}","${dp.field}","${dp.value}",${dp.confidence}\n`; });
-            mimeType = 'text/csv'; extension = 'csv';
-        } else {
-            content = JSON.stringify(allDp, null, 2);
-            mimeType = 'application/json'; extension = 'json';
-        }
-        const blob = new Blob([content], { type: mimeType });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = `blueflame-extraction-${new Date().toISOString().slice(0, 10)}.${extension}`;
-        a.click(); URL.revokeObjectURL(url);
-        showToast(`Downloaded ${extension.toUpperCase()} export`, 'success');
-    }
-
-    // ============================================
-    // API EXPLORER — Postman-style with Params, Body Types, Auto-Status
+    // API EXPLORER — Postman-style (unchanged)
     // ============================================
     function initApiExplorer() {
         renderApiCategories();
@@ -700,7 +794,6 @@
 
         $('#btnSendRequest').addEventListener('click', sendApiRequest);
 
-        // Explorer tabs (Params | Headers | Body | Auto-Status)
         $$('.explorer-tab').forEach(tab => {
             tab.addEventListener('click', () => {
                 $$('.explorer-tab').forEach(t => t.classList.remove('active'));
@@ -715,7 +808,6 @@
         $('#btnAddHeader').addEventListener('click', () => addKvRow('headersEditor', '', '', true));
         $('#btnAddParam').addEventListener('click', () => addKvRow('paramsEditor', '', '', true));
 
-        // Prettify JSON button
         $('#btnPrettifyBody').addEventListener('click', () => {
             const textarea = $('#apiBodyContent');
             try {
@@ -727,7 +819,6 @@
             }
         });
 
-        // Response tabs
         $$('.response-tab').forEach(tab => {
             tab.addEventListener('click', () => {
                 $$('.response-tab').forEach(t => t.classList.remove('active'));
@@ -739,7 +830,6 @@
             });
         });
 
-        // Global vars in Explorer — sync bidirectionally
         ['explorerRestEndpoint', 'explorerApiToken', 'explorerUserId'].forEach(id => {
             const el = $(`#${id}`);
             if (el) {
@@ -762,7 +852,6 @@
             }
         });
 
-        // Toggle token visibility
         const btnToggle = $('#btnExplorerToggleToken');
         if (btnToggle) {
             btnToggle.addEventListener('click', () => {
@@ -782,7 +871,6 @@
         if (tkInput) tkInput.value = window.BF_GLOBALS.API_TOKEN || '';
         if (uidInput) uidInput.value = window.BF_GLOBALS.USER_ID || '';
 
-        // Auth preview
         const preview = $('#apiAuthKeyPreview');
         if (preview) {
             const k = window.BF_GLOBALS.API_TOKEN;
@@ -863,7 +951,6 @@
         };
         $('#apiBodyContent').value = ep.body ? resolveTemplateVars(ep.body, vars) : '';
 
-        // Load headers
         const headersEditor = $('#headersEditor');
         headersEditor.innerHTML = '';
         (ep.headers || []).forEach(h => {
@@ -871,37 +958,28 @@
         });
         updateHeaderCount();
 
-        // Clear params
         $('#paramsEditor').innerHTML = '';
 
-        // Set body type radio based on method
         if (ep.method === 'GET') {
             document.querySelector('input[name="bodyType"][value="none"]').checked = true;
         } else {
             document.querySelector('input[name="bodyType"][value="json"]').checked = true;
         }
 
-        // Auto-status checkbox
         $('#autoStatusEnabled').checked = ep.autoStatus !== false;
-
         syncExplorerGlobals();
 
-        // Clear response areas
         $('#apiResponse').innerHTML = '<pre><code>// Click "Send" to execute this request</code></pre>';
         $('#apiResponseHeaders').innerHTML = '<pre><code>// Response headers will appear here</code></pre>';
         $('#apiResponseStatusResult').innerHTML = '<pre><code>// Auto-status polling result will appear here after POST requests</code></pre>';
         $('#responseMeta').innerHTML = '';
         $('#explorerAutoStatusLog').innerHTML = '<div class="empty-state small"><i class="fas fa-satellite-dish"></i><p>Status polling log will appear here after a POST request</p></div>';
 
-        // Switch to Headers tab
         $$('.explorer-tab').forEach(t => t.classList.toggle('active', t.dataset.explorerTab === 'headers'));
         $$('.explorer-tab-content').forEach(c => c.style.display = 'none');
         $('#explorerTabHeaders').style.display = 'block';
     }
 
-    /**
-     * Build query string from the Params KV editor
-     */
     function buildQueryString() {
         const params = [];
         $$('#paramsEditor .kv-row').forEach(row => {
@@ -914,9 +992,6 @@
         return params.length > 0 ? '?' + params.join('&') : '';
     }
 
-    /**
-     * Send the API request with auto-status polling for POST requests.
-     */
     async function sendApiRequest() {
         const method = $('#apiMethod').value;
         let url = $('#apiUrl').value;
@@ -925,16 +1000,10 @@
 
         if (!url) { showToast('Please enter a URL', 'warning'); return; }
 
-        // Resolve global template variables in URL
         url = resolveTemplateVars(url);
-
-        // Append query params from Params tab
         url += buildQueryString();
-
-        // Resolve template variables in body
         if (body) body = resolveTemplateVars(body);
 
-        // Collect enabled headers, resolving template vars
         const headers = {};
         $$('#headersEditor .kv-row').forEach(row => {
             const enabled = row.querySelector('.kv-enabled')?.checked;
@@ -952,29 +1021,24 @@
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner"></span>';
 
-        // Send the request
         const result = await client.sendRawRequest(method, url, headers, body || null, autoStatusEnabled);
 
         btn.disabled = false;
         btn.innerHTML = '<i class="fas fa-play"></i> Send';
 
-        // Display response meta
         const meta = $('#responseMeta');
         meta.innerHTML = result.ok
             ? `<span class="status-ok">${result.status} ${result.statusText}</span> · ${result.elapsed}ms`
             : `<span class="status-err">${result.status} ${result.statusText}</span> · ${result.elapsed}ms`;
 
-        // Display response body
         const responseStr = typeof result.data === 'object' ? JSON.stringify(result.data, null, 2) : String(result.data);
         $('#apiResponse').innerHTML = `<pre><code>${escapeHtml(responseStr)}</code></pre>`;
 
-        // Display response headers
         if (result.headers && Object.keys(result.headers).length > 0) {
             const hdrStr = Object.entries(result.headers).map(([k, v]) => `${k}: ${v}`).join('\n');
             $('#apiResponseHeaders').innerHTML = `<pre><code>${escapeHtml(hdrStr)}</code></pre>`;
         }
 
-        // ── AUTO-STATUS POLLING for POST requests ──
         if (autoStatusEnabled && method === 'POST' && result.ok) {
             const callId = result.callId || client._extractCallId(result.data);
             if (callId) {
@@ -983,14 +1047,12 @@
                 client.statusPollInterval = pollInterval;
                 client.statusPollMaxRetries = maxRetries;
 
-                // Switch to Auto-Status response tab
                 $$('.response-tab').forEach(t => t.classList.toggle('active', t.dataset.resp === 'status-result'));
                 $('#apiResponse').style.display = 'none';
                 $('#apiResponseHeaders').style.display = 'none';
                 $('#apiResponseStatusResult').style.display = 'block';
                 $('#apiResponseStatusResult').innerHTML = `<pre><code>// Polling status for call_id: ${callId}...</code></pre>`;
 
-                // Update Auto-Status tab log
                 const logContainer = $('#explorerAutoStatusLog');
                 logContainer.innerHTML = '';
                 function addStatusLog(text, cls) {
@@ -1002,7 +1064,6 @@
                 }
                 addStatusLog(`POST returned call_id: <code>${callId}</code>. Starting auto-poll...`, 'log-info');
 
-                // Poll
                 const statusResult = await client.pollStatus(callId, (update) => {
                     addStatusLog(`Poll #${update.attempt}: status = <strong>${update.status || 'pending'}</strong>`, 'log-info');
                     meta.innerHTML += ` · <span style="color:var(--color-info)">poll #${update.attempt}: ${update.status || 'pending'}</span>`;
@@ -1030,7 +1091,7 @@
     }
 
     // ============================================
-    // API CALLS TAB (Hideable)
+    // API CALLS TAB (Hideable) — unchanged
     // ============================================
     function initApiCallsTab() {
         $('#apiCallsSearch').addEventListener('input', renderApiCallsList);
@@ -1050,7 +1111,7 @@
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `blueflame-api-calls-${new Date().toISOString().slice(0, 10)}.json`;
+            a.download = `blueflame-api-calls-${dateStamp()}.json`;
             a.click();
             URL.revokeObjectURL(url);
             showToast('API calls exported', 'success');
@@ -1172,22 +1233,19 @@
     }
 
     // ============================================
-    // CONFIGURATION TAB — 3 Global Variables + Email/Name
+    // CONFIGURATION TAB — unchanged
     // ============================================
     function initConfigTab() {
         restoreConfigFields();
 
-        // Auto-sync email → USER_ID
         $('#cfgEmail').addEventListener('input', () => {
             const email = $('#cfgEmail').value.trim();
             const userIdField = $('#cfgUserId');
-            // Only auto-sync if USER_ID is empty or matches the old email
             if (!userIdField.value || userIdField.value === client.email) {
                 userIdField.value = email;
             }
         });
 
-        // Save & Connect
         $('#btnSaveCredentials').addEventListener('click', () => {
             const endpoint = $('#cfgRestEndpoint').value.trim();
             const token = $('#cfgApiToken').value.trim();
@@ -1200,7 +1258,7 @@
 
             client.restApiEndpoint = endpoint;
             client.apiToken = token;
-            client.userId = userId || email;  // Default USER_ID to email
+            client.userId = userId || email;
             client.name = name;
             client.email = email;
             client.lastConnected = new Date().toISOString();
@@ -1219,7 +1277,6 @@
             $('#credentialStatus').className = 'badge success';
         });
 
-        // Test Connection
         $('#btnTestConnection').addEventListener('click', async () => {
             const endpoint = $('#cfgRestEndpoint').value.trim();
             const token = $('#cfgApiToken').value.trim();
@@ -1264,7 +1321,6 @@
             btn.innerHTML = '<i class="fas fa-plug"></i> Test Connection';
         });
 
-        // Clear All
         $('#btnClearCredentials').addEventListener('click', () => {
             if (confirm('Clear all API credentials and global variables?')) {
                 client.clearConfig();
@@ -1278,7 +1334,6 @@
             }
         });
 
-        // Toggle token visibility
         $('#btnToggleApiToken').addEventListener('click', () => {
             const i = $('#cfgApiToken');
             const ic = $('#btnToggleApiToken i');
@@ -1286,36 +1341,35 @@
             else { i.type = 'password'; ic.className = 'fas fa-eye'; }
         });
 
-        // Danger Zone
         $('#btnResetAll').addEventListener('click', () => {
             if (confirm('Clear ALL settings and data?')) {
                 localStorage.clear();
                 client.clearConfig();
-                state.extractions = [];
-                state.submissions = [];
-                state.selectedExtractions.clear();
+                state.companies = [];
+                state.importHistory = [];
+                state.selectedForEnrich.clear();
                 window.apiCallLog = [];
                 restoreConfigFields();
                 updateConnectionStatus();
                 updateConfigStatusPanel();
                 syncExplorerGlobals();
-                renderReviewGrid();
-                renderExportSelections();
-                renderRecentSubmissions();
+                renderEnrichCompanyList();
+                renderVisualizeTable();
+                renderRecentImports();
                 renderApiCallsList();
                 updateApiCallsBadge();
                 showToast('All settings cleared', 'warning');
             }
         });
         $('#btnPurgeCache').addEventListener('click', () => {
-            if (confirm('Purge all cached extraction data?')) {
-                state.extractions = [];
-                state.submissions = [];
-                localStorage.removeItem('bf_extractions');
-                localStorage.removeItem('bf_submissions');
-                renderReviewGrid();
-                renderExportSelections();
-                renderRecentSubmissions();
+            if (confirm('Purge all cached company and enrichment data?')) {
+                state.companies = [];
+                state.importHistory = [];
+                localStorage.removeItem('bf_companies');
+                localStorage.removeItem('bf_import_history');
+                renderEnrichCompanyList();
+                renderVisualizeTable();
+                renderRecentImports();
                 showToast('Cache purged', 'warning');
             }
         });
@@ -1340,7 +1394,6 @@
     }
 
     function updateConfigStatusPanel() {
-        // API Connection
         const sApi = $('#statusIconApi'), tApi = $('#statusTextApi');
         if (client.lastConnected && client.isConfigured()) {
             sApi.className = 'config-status-icon status-green';
@@ -1353,7 +1406,6 @@
             tApi.textContent = 'Not connected';
         }
 
-        // REST_API_ENDPOINT
         const sEp = $('#statusIconEndpoint'), tEp = $('#statusTextEndpoint');
         if (window.BF_GLOBALS.REST_API_ENDPOINT) {
             sEp.className = 'config-status-icon status-green';
@@ -1363,7 +1415,6 @@
             tEp.textContent = 'Not set';
         }
 
-        // API_TOKEN
         const sAuth = $('#statusIconAuth'), tAuth = $('#statusTextAuth');
         if (window.BF_GLOBALS.API_TOKEN) {
             sAuth.className = 'config-status-icon status-green';
@@ -1374,7 +1425,6 @@
             tAuth.textContent = 'No token configured';
         }
 
-        // USER_ID
         const sUid = $('#statusIconUserId'), tUid = $('#statusTextUserId');
         if (window.BF_GLOBALS.USER_ID) {
             sUid.className = 'config-status-icon status-green';
@@ -1384,7 +1434,6 @@
             tUid.textContent = 'Not set (will default to email)';
         }
 
-        // User Profile
         const sUser = $('#statusIconUser'), tUser = $('#statusTextUser');
         if (client.name && client.email) {
             sUser.className = 'config-status-icon status-green';
@@ -1397,7 +1446,6 @@
             tUser.textContent = 'Not set';
         }
 
-        // Connected info box
         const info = $('#configConnectedInfo');
         if (client.isConfigured()) {
             info.style.display = 'block';
@@ -1450,84 +1498,8 @@
     }
 
     // ============================================
-    // DEMO DATA (removed — extractions now use real API output)
+    // JSON PARSING UTILITIES
     // ============================================
-
-    /**
-     * Parse real extraction output from the API into datapoints.
-     * Handles: markdown-fenced JSON, raw JSON array/object, plain text.
-     * Returns { datapoints: [...], confidence: number }
-     */
-    function parseExtractionOutput(output) {
-        const empty = { datapoints: [], confidence: 0 };
-        if (output == null) return empty;
-
-        let data = output;
-
-        // If string, try to extract JSON from markdown fences or parse directly
-        if (typeof data === 'string') {
-            data = extractJsonFromString(data);
-            if (data === null) {
-                // Could not parse any JSON — treat entire string as a single text response
-                return {
-                    datapoints: [{ label: 'Response', value: output, confidence: 100, page: null }],
-                    confidence: 100
-                };
-            }
-        }
-
-        // If it's an array, each element is a datapoint
-        if (Array.isArray(data)) {
-            const dps = data.map((item, i) => normalizeDatapoint(item, i));
-            return { datapoints: dps, confidence: avgConfidence(dps) };
-        }
-
-        // If it's an object, look for nested arrays
-        if (typeof data === 'object') {
-            const arrayField = data.results || data.datapoints || data.fields || data.items
-                || data.extractions || data.data || data.extracted_data || data.records;
-            if (Array.isArray(arrayField)) {
-                const dps = arrayField.map((item, i) => normalizeDatapoint(item, i));
-                return { datapoints: dps, confidence: avgConfidence(dps) };
-            }
-
-            // Text/message field
-            if (data.message || data.text || data.answer || data.response) {
-                const text = data.message || data.text || data.answer || data.response;
-                const inner = extractJsonFromString(String(text));
-                if (inner && Array.isArray(inner)) {
-                    const dps = inner.map((item, i) => normalizeDatapoint(item, i));
-                    return { datapoints: dps, confidence: avgConfidence(dps) };
-                }
-                return {
-                    datapoints: [{ label: 'Response', value: String(text), confidence: 100, page: null }],
-                    confidence: 100
-                };
-            }
-
-            // Key-value pairs as datapoints
-            const entries = Object.entries(data).filter(([k]) =>
-                !['status', 'id', 'call_id', 'user_id', 'metadata', 'error', 'quota'].includes(k)
-            );
-            if (entries.length > 0) {
-                const dps = entries.map(([key, val], i) => ({
-                    label: key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
-                    value: typeof val === 'object' ? JSON.stringify(val) : String(val),
-                    confidence: 100,
-                    page: null
-                }));
-                return { datapoints: dps, confidence: 100 };
-            }
-        }
-
-        return empty;
-    }
-
-    /**
-     * Extract JSON from a string that may contain markdown fences,
-     * prose before/after the JSON, or raw JSON.
-     * Returns parsed data or null.
-     */
     function extractJsonFromString(str) {
         if (!str || typeof str !== 'string') return null;
 
@@ -1541,7 +1513,6 @@
         const firstBracket = str.search(/[\[{]/);
         if (firstBracket !== -1) {
             const substr = str.substring(firstBracket);
-            // Find matching closing bracket
             const open = substr[0];
             const close = open === '[' ? ']' : '}';
             let depth = 0;
@@ -1558,565 +1529,74 @@
         try { return JSON.parse(str); } catch (e) { return null; }
     }
 
-    /** Normalize a single datapoint from various API formats */
-    function normalizeDatapoint(item, index) {
-        if (typeof item === 'string') {
-            return { label: `Item ${index + 1}`, value: item, confidence: 100, page: null };
-        }
-        if (typeof item !== 'object') {
-            return { label: `Item ${index + 1}`, value: String(item), confidence: 100, page: null };
-        }
-        return {
-            label: item.label || item.field || item.name || item.key || item.metric || `Field ${index + 1}`,
-            value: item.value != null ? String(item.value) : (item.result || item.answer || item.text || '—'),
-            confidence: item.confidence != null ? Number(item.confidence) : (item.score != null ? Math.round(item.score * 100) : 100),
-            page: item.page || item.page_number || item.source_page || null
-        };
-    }
-
-    function avgConfidence(datapoints) {
-        if (datapoints.length === 0) return 0;
-        const sum = datapoints.reduce((acc, dp) => acc + (dp.confidence || 0), 0);
-        return Number((sum / datapoints.length).toFixed(1));
-    }
-
     // ============================================
-    // FINANCIAL STATEMENT MAPPING ENGINE
+    // DATA PERSISTENCE
     // ============================================
-
-    /** Canonical line items per statement */
-    const SCHEMA_MAP = {
-        BS: {
-            name: 'Balance Sheet',
-            icon: 'fa-balance-scale',
-            items: {
-                'Cash & Equivalents': 'Current Assets',
-                'Accounts Receivable': 'Current Assets',
-                'Inventory': 'Current Assets',
-                'Other Current Assets': 'Current Assets',
-                'PP&E (Net)': 'Non-Current Assets',
-                'Intangibles & Goodwill': 'Non-Current Assets',
-                'Other Non-Current Assets': 'Non-Current Assets',
-                'Total Assets': '—',
-                'Accounts Payable': 'Current Liabilities',
-                'Accrued Expenses': 'Current Liabilities',
-                'Short-Term Debt': 'Current Liabilities',
-                'Other Current Liabilities': 'Current Liabilities',
-                'Long-Term Debt': 'Non-Current Liabilities',
-                'Other Non-Current Liabilities': 'Non-Current Liabilities',
-                'Total Liabilities': '—',
-                "Owner's Equity / Retained Earnings": 'Equity',
-                'Total Liabilities & Equity': '—'
-            }
-        },
-        IS: {
-            name: 'Income Statement',
-            icon: 'fa-chart-line',
-            items: {
-                'Revenue': 'Top Line',
-                'COGS': 'Direct Costs',
-                'Gross Profit': '—',
-                'SG&A': 'Operating Expenses',
-                'D&A': 'Operating Expenses',
-                'Other Operating Expenses': 'Operating Expenses',
-                'Operating Income (EBIT)': '—',
-                'Interest Expense': 'Below the Line',
-                'Other Income / (Expense)': 'Below the Line',
-                'Pre-Tax Income': '—',
-                'Tax Expense': 'Tax',
-                'Net Income': 'Bottom Line'
-            }
-        },
-        CF: {
-            name: 'Cash Flow Statement',
-            icon: 'fa-money-bill-wave',
-            items: {
-                'Net Income': 'Operating',
-                'D&A Add-Back': 'Operating',
-                'Changes in Working Capital': 'Operating',
-                'Cash from Operations (CFO)': '—',
-                'CapEx': 'Investing',
-                'Acquisitions / Divestitures': 'Investing',
-                'Cash from Investing (CFI)': '—',
-                'Debt Issuance / Repayment': 'Financing',
-                'Equity Issuance / Distributions': 'Financing',
-                'Cash from Financing (CFF)': '—',
-                'Net Change in Cash': '—'
-            }
-        }
-    };
-
-    // ── External → Internal mapping table (from specification) ──
-    const MAPPING_TABLE = [
-        // Balance Sheet
-        { variants: ['cash', 'cash & short-term investments', 'liquidity', 'cash equiv', 'cash and cash equiv', 'cash & equiv'], field: 'Cash & Equivalents', stmt: 'BS' },
-        { variants: ['trade receivables', 'net receivables', 'a/r', 'accounts receivable', 'ar', 'trade receivable', 'net receivable'], field: 'Accounts Receivable', stmt: 'BS' },
-        { variants: ['finished goods', 'raw materials', 'wip', 'stock', 'inventory', 'raw material'], field: 'Inventory', stmt: 'BS' },
-        { variants: ['prepaids', 'deposits', 'other ca', 'prepaid', 'other current asset', 'other current assets', 'deposit'], field: 'Other Current Assets', stmt: 'BS' },
-        { variants: ['fixed assets', 'tangible assets', 'net pp&e', 'pp&e', 'ppe', 'net ppe', 'property plant', 'property plant and equipment', 'fixed asset', 'tangible asset'], field: 'PP&E (Net)', stmt: 'BS' },
-        { variants: ['goodwill', 'customer relationships', 'ip', 'patents', 'intangible', 'intangibles', 'intangibles & goodwill', 'intangible asset', 'patent', 'customer relationship'], field: 'Intangibles & Goodwill', stmt: 'BS' },
-        { variants: ['other non-current asset', 'other noncurrent asset', 'other long-term asset', 'other non current asset'], field: 'Other Non-Current Assets', stmt: 'BS' },
-        { variants: ['total assets', 'total asset'], field: 'Total Assets', stmt: 'BS' },
-        { variants: ['trade payables', 'a/p', 'accounts payable', 'ap', 'trade payable'], field: 'Accounts Payable', stmt: 'BS' },
-        { variants: ['accruals', 'accrued liabilities', 'accrued comp', 'accrued', 'accrual', 'accrued expense', 'accrued expenses'], field: 'Accrued Expenses', stmt: 'BS' },
-        { variants: ['revolver', 'current portion ltd', 'line of credit', 'short-term debt', 'short term debt', 'current portion of long-term debt'], field: 'Short-Term Debt', stmt: 'BS' },
-        { variants: ['other current liabilit', 'other current liability', 'other cl'], field: 'Other Current Liabilities', stmt: 'BS' },
-        { variants: ['term loan', 'senior secured', 'notes payable', 'bonds', 'long-term debt', 'long term debt', 'bond', 'note payable'], field: 'Long-Term Debt', stmt: 'BS' },
-        { variants: ['other non-current liabilit', 'other noncurrent liabilit', 'other long-term liabilit'], field: 'Other Non-Current Liabilities', stmt: 'BS' },
-        { variants: ['total liabilities', 'total liabilit'], field: 'Total Liabilities', stmt: 'BS' },
-        { variants: ["members' equity", "partners' capital", 'retained earnings', 'shareholder equity', "owner's equity", 'stockholder equity', 'total equity', 'member equity', 'partner capital', 'retained earning', 'shareholders equity', 'owners equity'], field: "Owner's Equity / Retained Earnings", stmt: 'BS' },
-        { variants: ['total liabilities & equity', 'total liabilities and equity', 'total l&e'], field: 'Total Liabilities & Equity', stmt: 'BS' },
-        // Income Statement
-        { variants: ['net sales', 'total revenue', 'gross revenue', 'revenue', 'net revenue', 'sales', 'top line'], field: 'Revenue', stmt: 'IS' },
-        { variants: ['cost of sales', 'cost of revenue', 'direct costs', 'cogs', 'cost of goods sold', 'cost of goods', 'direct cost'], field: 'COGS', stmt: 'IS' },
-        { variants: ['gross profit', 'gross margin', 'gross income'], field: 'Gross Profit', stmt: 'IS' },
-        { variants: ['selling expense', 'g&a', 'overhead', 'opex', 'sg&a', 'sga', 'general & admin', 'general and admin', 'operating expense', 'operating expenses', 'selling general'], field: 'SG&A', stmt: 'IS' },
-        { variants: ['depreciation', 'amortization', 'd&a', 'da', 'depreciation & amortization', 'depreciation and amortization'], field: 'D&A', stmt: 'IS' },
-        { variants: ['other operating expense', 'other opex', 'other operating cost'], field: 'Other Operating Expenses', stmt: 'IS' },
-        { variants: ['operating income', 'ebit', 'income from operations', 'operating profit', 'operating income ebit'], field: 'Operating Income (EBIT)', stmt: 'IS' },
-        { variants: ['interest', 'debt service cost', 'interest expense', 'interest cost', 'debt service'], field: 'Interest Expense', stmt: 'IS' },
-        { variants: ['other income', 'other expense', 'non-operating', 'other income expense', 'non operating income'], field: 'Other Income / (Expense)', stmt: 'IS' },
-        { variants: ['pre-tax income', 'pretax income', 'income before tax', 'ebt', 'pretax', 'pre tax income', 'earnings before tax'], field: 'Pre-Tax Income', stmt: 'IS' },
-        { variants: ['income tax', 'provision for taxes', 'tax expense', 'provision for tax', 'income tax expense', 'tax'], field: 'Tax Expense', stmt: 'IS' },
-        { variants: ['net income', 'net profit', 'net earnings', 'bottom line', 'net earning', 'net loss'], field: 'Net Income', stmt: 'IS' },
-        { variants: ['ebitda', 'adjusted ebitda'], field: 'EBITDA', stmt: 'IS' },
-        { variants: ['earnings per share', 'eps', 'basic eps', 'diluted eps'], field: 'EPS', stmt: 'IS' },
-        // Cash Flow
-        { variants: ['d&a add-back', 'depreciation add-back', 'amortization add-back', 'da add back', 'depreciation add back'], field: 'D&A Add-Back', stmt: 'CF' },
-        { variants: ['changes in working capital', 'change in working capital', 'working capital', 'delta in a/r', 'delta in inventory', 'delta in a/p', 'change in a/r', 'change in inventory', 'change in a/p', 'wc changes'], field: 'Changes in Working Capital', stmt: 'CF' },
-        { variants: ['cash from operations', 'cfo', 'operating cash flow', 'cash from operating', 'operating cash', 'net cash from operating'], field: 'Cash from Operations (CFO)', stmt: 'CF' },
-        { variants: ['capital expenditures', 'purchases of pp&e', 'capex', 'capital expenditure', 'purchase of ppe', 'purchases of ppe', 'cap ex'], field: 'CapEx', stmt: 'CF' },
-        { variants: ['acquisitions', 'divestitures', 'acquisition', 'divestiture', 'acquisitions / divestitures'], field: 'Acquisitions / Divestitures', stmt: 'CF' },
-        { variants: ['cash from investing', 'cfi', 'investing cash flow', 'cash from invest', 'investing cash', 'net cash from investing'], field: 'Cash from Investing (CFI)', stmt: 'CF' },
-        { variants: ['borrowings', 'debt proceeds', 'repayments', 'debt issuance', 'debt repayment', 'borrowing', 'debt proceed', 'repayment', 'debt issuance / repayment'], field: 'Debt Issuance / Repayment', stmt: 'CF' },
-        { variants: ['dividends', 'distributions', 'buybacks', 'dividend', 'distribution', 'buyback', 'equity issuance', 'equity issuance / distributions'], field: 'Equity Issuance / Distributions', stmt: 'CF' },
-        { variants: ['cash from financing', 'cff', 'financing cash flow', 'financing cash', 'net cash from financing'], field: 'Cash from Financing (CFF)', stmt: 'CF' },
-        { variants: ['net change in cash', 'change in cash', 'ending cash', 'ending cash balance', 'net cash change'], field: 'Net Change in Cash', stmt: 'CF' }
-    ];
-
-    /** Sign convention: which categories should be positive */
-    const POSITIVE_SIGN = {
-        BS: ['Current Assets', 'Non-Current Assets', '—', 'Equity'],
-        IS: ['Top Line', '—', 'Bottom Line'],
-        CF: ['Operating', '—']
-    };
-
-    // ── String similarity (Levenshtein-based token-set ratio) ──
-
-    /** Levenshtein distance between two strings */
-    function levenshtein(a, b) {
-        const m = a.length, n = b.length;
-        if (m === 0) return n;
-        if (n === 0) return m;
-        const d = Array.from({ length: m + 1 }, (_, i) => i);
-        for (let j = 1; j <= n; j++) {
-            let prev = d[0]; d[0] = j;
-            for (let i = 1; i <= m; i++) {
-                const tmp = d[i];
-                d[i] = a[i - 1] === b[j - 1] ? prev : Math.min(prev, d[i], d[i - 1]) + 1;
-                prev = tmp;
-            }
-        }
-        return d[m];
-    }
-
-    /** Similarity ratio 0–100 between two strings */
-    function similarity(a, b) {
-        if (!a && !b) return 100;
-        if (!a || !b) return 0;
-        const maxLen = Math.max(a.length, b.length);
-        if (maxLen === 0) return 100;
-        return Math.round((1 - levenshtein(a, b) / maxLen) * 100);
-    }
-
-    /** Token-set similarity: best match between token sets */
-    function tokenSetSimilarity(input, candidate) {
-        const tokensA = input.split(/\s+/).filter(Boolean);
-        const tokensB = candidate.split(/\s+/).filter(Boolean);
-        // Full string similarity
-        const full = similarity(input, candidate);
-        // Check if input contains candidate or vice versa
-        const containsScore = input.includes(candidate) || candidate.includes(input) ? 95 : 0;
-        // Sorted token intersection similarity
-        const sortedA = [...tokensA].sort().join(' ');
-        const sortedB = [...tokensB].sort().join(' ');
-        const sorted = similarity(sortedA, sortedB);
-        return Math.max(full, containsScore, sorted);
-    }
-
-    /** Normalize a label: lowercase, strip special chars, collapse whitespace */
-    function normalizeLabel(label) {
-        return (label || '').toLowerCase()
-            .replace(/[^a-z0-9\s\/&()-]/g, '')
-            .replace(/\s+/g, ' ')
-            .trim();
-    }
-
-    /**
-     * Match an external label against the mapping table.
-     * Uses token-set similarity with ≥85% threshold.
-     * Returns { field, stmt, score } or null.
-     */
-    function matchLabel(rawLabel) {
-        const normalized = normalizeLabel(rawLabel);
-        if (!normalized) return null;
-
-        let bestMatch = null;
-        let bestScore = 0;
-
-        for (const entry of MAPPING_TABLE) {
-            for (const variant of entry.variants) {
-                const score = tokenSetSimilarity(normalized, normalizeLabel(variant));
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestMatch = { field: entry.field, stmt: entry.stmt, score };
-                }
-            }
-        }
-
-        // Threshold ≥ 85%
-        return bestScore >= 85 ? bestMatch : null;
-    }
-
-    /**
-     * Normalize sign convention for a value.
-     * Assets, Revenue, Cash Inflows → positive
-     * Liabilities, Expenses, Cash Outflows → negative (or positive per convention)
-     */
-    function normalizeSign(value, stmt, category) {
-        const num = typeof value === 'number' ? value : parseFloat(String(value).replace(/[$,\s%]/g, ''));
-        if (isNaN(num)) return value; // Non-numeric, return as-is
-        const positive = POSITIVE_SIGN[stmt]?.includes(category);
-        // We don't flip signs — just flag if convention is violated
-        return num;
-    }
-
-    /**
-     * Cross-statement integrity checks.
-     * Returns array of { check, pass, detail } objects.
-     */
-    function validateCrossStatement(mapped) {
-        const checks = [];
-        const val = (stmt, field) => {
-            const dp = mapped.find(d => d.statement === stmt && d.field === field);
-            if (!dp) return null;
-            const num = typeof dp.value === 'number' ? dp.value : parseFloat(String(dp.value).replace(/[$,\s%]/g, ''));
-            return isNaN(num) ? null : num;
-        };
-
-        // Total Assets = Total Liabilities + Equity
-        const ta = val('BS', 'Total Assets');
-        const tl = val('BS', 'Total Liabilities');
-        const eq = val('BS', "Owner's Equity / Retained Earnings");
-        if (ta != null && tl != null && eq != null) {
-            const pass = Math.abs(ta - (tl + eq)) < 1;
-            checks.push({ check: 'Total Assets = Total Liabilities + Equity', pass, detail: `${ta} vs ${tl} + ${eq} = ${tl + eq}` });
-        }
-
-        // Net Income (IS) = Net Income (CF starting point)
-        const niIS = val('IS', 'Net Income');
-        const niCF = val('CF', 'Net Income');
-        if (niIS != null && niCF != null) {
-            const pass = Math.abs(niIS - niCF) < 1;
-            checks.push({ check: 'Net Income (IS) = Net Income (CF)', pass, detail: `IS: ${niIS} vs CF: ${niCF}` });
-        }
-
-        // Ending Cash (CF) = Cash & Equivalents (BS)
-        const cashBS = val('BS', 'Cash & Equivalents');
-        const cashCF = val('CF', 'Net Change in Cash');
-        if (cashBS != null && cashCF != null) {
-            checks.push({ check: 'Ending Cash (CF) ↔ Cash & Equivalents (BS)', pass: null, detail: `BS Cash: ${cashBS}, CF Net Change: ${cashCF} (manual check)` });
-        }
-
-        return checks;
-    }
-
-    /**
-     * Match a single label against all schema line items directly (exact after normalization).
-     * Checks every statement's items. Returns { field, stmt, score:100 } or null.
-     */
-    function directSchemaMatch(label) {
-        const norm = normalizeLabel(label);
-        if (!norm) return null;
-        for (const [stmtKey, schema] of Object.entries(SCHEMA_MAP)) {
-            for (const canonical of Object.keys(schema.items)) {
-                if (norm === normalizeLabel(canonical)) {
-                    return { field: canonical, stmt: stmtKey, score: 100 };
-                }
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Full parsing engine: classify datapoints into mapped/unmapped.
-     *
-     * Matching priority:
-     *   1. dp.category direct match against schema line item names
-     *   2. dp.field direct match against schema line item names
-     *   3. Fuzzy match dp.field against MAPPING_TABLE (≥85%)
-     *   4. Fuzzy match dp.category against MAPPING_TABLE (≥85%)
-     *   5. UNMAPPED
-     *
-     * If dp.category === "UNMAPPED", skip step 1 (LLM already flagged it).
-     *
-     * Then: normalize sign, run cross-statement validation.
-     */
-    function classifyDatapoints(datapoints) {
-        const mapped = [];
-        const unmapped = [];
-
-        datapoints.forEach((dp, idx) => {
-            const rawField = dp.field || dp.label || '';
-            const rawCategory = dp.category || '';
-            const rawSource = dp.source_label || dp.label || dp.field || '';
-            const isLlmUnmapped = normalizeLabel(rawCategory) === 'unmapped';
-
-            let match = null;
-
-            // Priority 1: Direct match dp.category against schema line item names
-            if (!isLlmUnmapped && rawCategory) {
-                match = directSchemaMatch(rawCategory);
-                if (match) match.via = 'category-direct';
-            }
-
-            // Priority 2: Direct match dp.field against schema line item names
-            if (!match && rawField) {
-                match = directSchemaMatch(rawField);
-                if (match) match.via = 'field-direct';
-            }
-
-            // Priority 3: Fuzzy match dp.field against MAPPING_TABLE
-            if (!match && rawField) {
-                match = matchLabel(rawField);
-                if (match) match.via = 'field-fuzzy';
-            }
-
-            // Priority 4: Fuzzy match dp.category against MAPPING_TABLE
-            if (!match && rawCategory && !isLlmUnmapped) {
-                match = matchLabel(rawCategory);
-                if (match) match.via = 'category-fuzzy';
-            }
-
-            // Assign or flag UNMAPPED
-            if (match) {
-                const category = SCHEMA_MAP[match.stmt]?.items?.[match.field] || '—';
-                const normalizedValue = normalizeSign(dp.value, match.stmt, category);
-                mapped.push({
-                    ...dp,
-                    field: match.field,
-                    statement: match.stmt,
-                    category,
-                    value: normalizedValue,
-                    matchScore: match.score,
-                    matchVia: match.via,
-                    source_label: rawSource
-                });
-            } else {
-                unmapped.push({
-                    ...dp,
-                    _unmappedIndex: idx + 1,
-                    source_label: rawSource
-                });
-            }
-        });
-
-        // Cross-statement validation
-        const validationChecks = validateCrossStatement(mapped);
-
-        return { mapped, unmapped, validationChecks };
-    }
-
-    /**
-     * Render the Mapped tab as a preset schema with values filled in.
-     * Every canonical line item is shown — populated ones have values, empty ones show '—'.
-     */
-    function renderMappedSchemaView(mapped, unmappedCount, validationChecks) {
-        const stmtOrder = ['IS', 'BS', 'CF'];
-        // Index mapped datapoints by statement+field for fast lookup
-        const index = {};
-        mapped.forEach(dp => {
-            const key = `${dp.statement}||${dp.field}`;
-            if (!index[key]) index[key] = [];
-            index[key].push(dp);
-        });
-
-        const populatedCount = mapped.length;
-        let html = `<div class="mapped-summary">`;
-        html += `<span class="badge success">${populatedCount} mapped</span>`;
-        if (unmappedCount > 0) html += `<span class="badge danger">${unmappedCount} unmapped</span>`;
-        html += `</div>`;
-
-        stmtOrder.forEach(stmtKey => {
-            const schema = SCHEMA_MAP[stmtKey];
-            const schemaItems = Object.entries(schema.items);
-            const filledCount = schemaItems.filter(([f]) => index[`${stmtKey}||${f}`]).length;
-
-            html += `<div class="stmt-group"><h4 class="stmt-group-title"><i class="fas ${schema.icon}"></i> ${schema.name} <span class="stmt-count">(${filledCount}/${schemaItems.length} populated)</span></h4>`;
-            html += `<table class="datapoint-table schema-table"><thead><tr><th>Line Item</th><th>Category</th><th>Value</th><th>Period</th><th>Source</th><th>Match</th></tr></thead><tbody>`;
-
-            schemaItems.forEach(([field, category]) => {
-                const key = `${stmtKey}||${field}`;
-                const dps = index[key];
-                if (dps && dps.length > 0) {
-                    dps.forEach(dp => {
-                        const scoreClass = (dp.matchScore || 0) >= 95 ? 'confidence-high' : (dp.matchScore || 0) >= 85 ? 'confidence-medium' : 'confidence-low';
-                        html += `<tr class="schema-row-filled">`;
-                        html += `<td><strong>${escapeHtml(field)}</strong></td>`;
-                        html += `<td><span class="category-badge">${escapeHtml(category)}</span></td>`;
-                        html += `<td class="datapoint-value">${escapeHtml(String(dp.value ?? ''))}</td>`;
-                        html += `<td>${escapeHtml(dp.period || '—')}</td>`;
-                        html += `<td class="text-muted" style="font-size:11px;">${escapeHtml(dp.source_label || '—')}</td>`;
-                        html += `<td><span class="datapoint-confidence ${scoreClass}">${dp.matchScore || '—'}%</span></td>`;
-                        html += `</tr>`;
-                    });
-                } else {
-                    html += `<tr class="schema-row-empty">`;
-                    html += `<td class="text-muted">${escapeHtml(field)}</td>`;
-                    html += `<td><span class="category-badge">${escapeHtml(category)}</span></td>`;
-                    html += `<td class="text-muted">—</td>`;
-                    html += `<td class="text-muted">—</td>`;
-                    html += `<td class="text-muted">—</td>`;
-                    html += `<td class="text-muted">—</td>`;
-                    html += `</tr>`;
-                }
-            });
-
-            html += `</tbody></table></div>`;
-        });
-
-        // Cross-statement validation checks
-        if (validationChecks && validationChecks.length > 0) {
-            html += `<div class="stmt-group"><h4 class="stmt-group-title"><i class="fas fa-clipboard-check"></i> Cross-Statement Validation</h4>`;
-            html += `<div class="validation-checks">`;
-            validationChecks.forEach(ck => {
-                const icon = ck.pass === true ? 'fa-check-circle' : ck.pass === false ? 'fa-times-circle' : 'fa-info-circle';
-                const cls = ck.pass === true ? 'validation-pass' : ck.pass === false ? 'validation-fail' : 'validation-info';
-                html += `<div class="validation-check ${cls}"><i class="fas ${icon}"></i> <strong>${escapeHtml(ck.check)}</strong><span class="text-muted" style="font-size:11px;margin-left:8px;">${escapeHtml(ck.detail)}</span></div>`;
-            });
-            html += `</div></div>`;
-        }
-
-        return html;
-    }
-
-    /** Build dropdown options for all schema fields, grouped by statement */
-    function buildSchemaDropdownOptions() {
-        let opts = '<option value="">— Select target field —</option>';
-        ['IS', 'BS', 'CF'].forEach(stmtKey => {
-            const schema = SCHEMA_MAP[stmtKey];
-            opts += `<optgroup label="${schema.name}">`;
-            Object.keys(schema.items).forEach(field => {
-                opts += `<option value="${stmtKey}||${field}">${field}</option>`;
-            });
-            opts += `</optgroup>`;
-        });
-        return opts;
-    }
-
-    /** Render unmapped datapoints as expandable items with remap dropdowns */
-    /** Keys to exclude from the unmapped field detail display */
-    const UNMAPPED_EXCLUDE_KEYS = ['_unmappedIndex', 'confidence', 'page', 'label'];
-
-    function renderUnmappedDatapoints(unmapped) {
-        if (unmapped.length === 0) {
-            return '<div class="empty-state small"><i class="fas fa-check-circle" style="color:var(--color-brand)"></i><p>All datapoints mapped successfully!</p></div>';
-        }
-
-        const dropdownOpts = buildSchemaDropdownOptions();
-        let html = `<div class="mapped-summary"><span class="badge danger">${unmapped.length} unmapped</span> <span class="text-muted" style="font-size:12px;">Each item below is a distinct object from the LLM response. Select a schema field to remap.</span></div>`;
-
-        unmapped.forEach((dp, idx) => {
-            const fieldNum = dp._unmappedIndex || (idx + 1);
-            const displayLabel = dp.source_label || dp.field || dp.label || `Field ${fieldNum}`;
-            const displayValue = dp.value != null ? String(dp.value) : '—';
-
-            html += `<div class="unmapped-item">`;
-            html += `<div class="unmapped-item-header">`;
-            html += `<div class="unmapped-item-label"><span class="unmapped-num">${fieldNum}</span> <strong>Unmapped Field ${fieldNum}</strong></div>`;
-            html += `<div class="unmapped-item-value">${escapeHtml(displayValue)}</div>`;
-            html += `</div>`;
-
-            // Show all properties from this JSON object
-            html += `<div class="unmapped-item-details">`;
-            html += `<table class="unmapped-detail-table">`;
-            const displayKeys = ['field', 'statement', 'category', 'value', 'period', 'source_label'];
-            displayKeys.forEach(key => {
-                const val = dp[key];
-                if (val != null && val !== '') {
-                    const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-                    html += `<tr><td class="unmapped-detail-key">${escapeHtml(label)}</td><td>${escapeHtml(String(val))}</td></tr>`;
-                }
-            });
-            // Show any extra keys not in the standard set
-            Object.keys(dp).forEach(key => {
-                if (!displayKeys.includes(key) && !UNMAPPED_EXCLUDE_KEYS.includes(key) && dp[key] != null && dp[key] !== '') {
-                    const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-                    html += `<tr><td class="unmapped-detail-key">${escapeHtml(label)}</td><td>${escapeHtml(String(dp[key]))}</td></tr>`;
-                }
-            });
-            html += `</table>`;
-            html += `</div>`;
-
-            // Remap dropdown
-            html += `<div class="unmapped-item-body">`;
-            html += `<span class="text-muted" style="font-size:12px;">Map to:</span>`;
-            html += `<select class="form-control unmapped-remap-select" data-idx="${idx}">${dropdownOpts}</select>`;
-            html += `</div>`;
-            html += `</div>`;
-        });
-        return html;
-    }
-
-    // ============================================
-    // DELETE EXTRACTIONS
-    // ============================================
-    function deleteExtraction(id) {
-        state.extractions = state.extractions.filter(e => e.id !== id);
-        state.selectedExtractions.delete(id);
-        saveExtractions();
-        renderReviewGrid();
-        renderExportSelections();
-        renderExportPreview();
-        showToast('Extraction deleted', 'info');
+    function saveCompanies() {
+        localStorage.setItem('bf_companies', JSON.stringify(state.companies));
     }
 
     // ============================================
     // UTILITIES
     // ============================================
     function generateId() { return 'bf-' + Math.random().toString(36).substring(2, 10) + Date.now().toString(36); }
-    /** Generate a unique document ID from the filename + timestamp, distinct from call/task IDs */
-    function generateDocumentId(fileName) {
-        const slug = (fileName || 'doc').replace(/[^a-zA-Z0-9]/g, '').substring(0, 12).toLowerCase();
-        return 'doc-' + slug + '-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
-    }
+    function dateStamp() { return new Date().toISOString().slice(0, 10); }
     function formatFileSize(bytes) { if (!bytes) return '0 B'; const s = ['B', 'KB', 'MB', 'GB']; const i = Math.floor(Math.log(bytes) / Math.log(1024)); return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + s[i]; }
     function getTimeAgo(d) { const s = Math.floor((new Date() - new Date(d)) / 1000); if (s < 60) return 'Just now'; if (s < 3600) return `${Math.floor(s / 60)}m ago`; if (s < 86400) return `${Math.floor(s / 3600)}h ago`; if (s < 604800) return `${Math.floor(s / 86400)}d ago`; return new Date(d).toLocaleDateString(); }
-    function getStatusBadge(s) { const m = { completed: '<span class="badge success">Completed</span>', approved: '<span class="badge success">Approved</span>', processing: '<span class="badge info">Processing</span>', failed: '<span class="badge danger">Failed</span>', pending: '<span class="badge">Pending</span>', success: '<span class="badge success">Success</span>', partial: '<span class="badge">Partial</span>' }; return m[s] || `<span class="badge">${s || 'Unknown'}</span>`; }
-    /**
-     * Extract document_id from an upload output response.
-     * Searches common field names in object or JSON-string output.
-     * Returns null if no document_id can be found.
-     */
-    function extractDocumentId(output) {
-        if (!output) return null;
-        let obj = output;
-        if (typeof output === 'string') {
-            try { obj = JSON.parse(output); } catch (e) { return null; }
-        }
-        if (typeof obj !== 'object') return null;
-        // Check common field names for the document identifier
-        return obj.document_id || obj.documentId || obj.doc_id || obj.docId
-            || obj.file_id || obj.fileId || obj.key || null;
-    }
-
-    function formatDocType(t) { return { income_statement: 'Income Statement', balance_sheet: 'Balance Sheet', cash_flow: 'Cash Flow Statement', trial_balance: 'Trial Balance', general_ledger: 'General Ledger', other: 'Other' }[t] || t; }
     function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
     function escapeAttr(s) { return String(s || '').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
+    function readFileAsText(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsText(file);
+        });
+    }
+
+    function parseCSV(text) {
+        const lines = text.split(/\r?\n/).filter(l => l.trim());
+        if (lines.length === 0) return { headers: [], rows: [] };
+        const headers = parseCSVLine(lines[0]);
+        const rows = lines.slice(1).map(l => parseCSVLine(l));
+        return { headers, rows };
+    }
+
+    function parseCSVLine(line) {
+        const result = [];
+        let current = '';
+        let inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (inQuotes) {
+                if (ch === '"' && line[i + 1] === '"') { current += '"'; i++; }
+                else if (ch === '"') { inQuotes = false; }
+                else { current += ch; }
+            } else {
+                if (ch === '"') { inQuotes = true; }
+                else if (ch === ',') { result.push(current.trim()); current = ''; }
+                else { current += ch; }
+            }
+        }
+        result.push(current.trim());
+        return result;
+    }
+
+    function downloadFile(content, mimeType, fileName) {
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
     $('#btnRefresh')?.addEventListener('click', () => {
         switch (state.activeTab) {
-            case 'review': pollExtractionStatuses().then(renderReviewGrid); break;
+            case 'visualize': renderVisualizeTable(); break;
+            case 'enrich': renderEnrichCompanyList(); break;
             case 'api-calls': renderApiCallsList(); break;
             default: showToast('Refreshed', 'info');
         }

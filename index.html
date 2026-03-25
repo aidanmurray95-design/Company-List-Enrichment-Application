@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BlueFlame Financial Extractor</title>
+    <title>BlueFlame Company Enrichment</title>
     <link rel="stylesheet" href="css/styles.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
@@ -15,20 +15,20 @@
                 <div class="logo-icon"><i class="fas fa-fire"></i></div>
                 <div class="logo-text">
                     <span class="logo-title">BlueFlame</span>
-                    <span class="logo-subtitle">Financial Extractor</span>
+                    <span class="logo-subtitle">Company Enrichment</span>
                 </div>
             </div>
         </div>
         <nav class="sidebar-nav">
             <ul>
-                <li class="nav-item active" data-tab="upload">
-                    <i class="fas fa-cloud-upload-alt"></i><span>Upload Documents</span>
+                <li class="nav-item active" data-tab="import">
+                    <i class="fas fa-file-import"></i><span>Import Companies</span>
                 </li>
-                <li class="nav-item" data-tab="review">
-                    <i class="fas fa-table"></i><span>Review Extractions</span>
+                <li class="nav-item" data-tab="enrich">
+                    <i class="fas fa-magic"></i><span>Enrich Data</span>
                 </li>
-                <li class="nav-item" data-tab="export">
-                    <i class="fas fa-paper-plane"></i><span>Export &amp; Email</span>
+                <li class="nav-item" data-tab="visualize">
+                    <i class="fas fa-table"></i><span>Visualize &amp; Export</span>
                 </li>
                 <li class="nav-item" data-tab="api-explorer">
                     <i class="fas fa-code"></i><span>API Explorer</span>
@@ -66,7 +66,7 @@
     <main class="main-content" id="mainContent">
         <header class="top-bar">
             <button class="btn-menu" id="btnMenu"><i class="fas fa-bars"></i></button>
-            <div class="breadcrumb" id="breadcrumb"><span>Upload Documents</span></div>
+            <div class="breadcrumb" id="breadcrumb"><span>Import Companies</span></div>
             <div class="top-bar-actions">
                 <button class="btn-icon" id="btnRefresh" title="Refresh"><i class="fas fa-sync-alt"></i></button>
                 <button class="btn-icon" id="btnThemeToggle" title="Toggle Theme"><i class="fas fa-moon"></i></button>
@@ -74,168 +74,186 @@
         </header>
 
         <!-- ══════════════════════════════════════════════
-             TAB 1: Upload Documents
+             TAB 1: Import Companies
              ══════════════════════════════════════════════ -->
-        <section class="tab-content active" id="tab-upload">
+        <section class="tab-content active" id="tab-import">
             <div class="tab-header">
-                <h1><i class="fas fa-cloud-upload-alt"></i> Upload Financial Statements</h1>
-                <p>Upload PDF or Excel financial statements for data extraction via BlueFlame</p>
+                <h1><i class="fas fa-file-import"></i> Import Company List</h1>
+                <p>Upload a spreadsheet of private companies to begin enrichment</p>
             </div>
             <div class="upload-layout">
                 <div class="upload-zone-container">
                     <div class="card upload-card">
                         <div class="card-header">
-                            <h3><i class="fas fa-file-upload"></i> Document Upload</h3>
+                            <h3><i class="fas fa-file-upload"></i> Spreadsheet Upload</h3>
                             <div class="upload-type-selector">
                                 <button class="chip active" data-type="all">All</button>
-                                <button class="chip" data-type="pdf">PDF</button>
                                 <button class="chip" data-type="excel">Excel</button>
+                                <button class="chip" data-type="csv">CSV</button>
                             </div>
                         </div>
                         <div class="upload-dropzone" id="uploadDropzone">
                             <div class="dropzone-content">
-                                <div class="dropzone-icon"><i class="fas fa-cloud-upload-alt"></i></div>
-                                <h3>Drag &amp; Drop Financial Statements</h3>
-                                <p>Supports PDF, XLS, XLSX, and CSV files</p>
+                                <div class="dropzone-icon"><i class="fas fa-file-excel"></i></div>
+                                <h3>Drag &amp; Drop Company Spreadsheet</h3>
+                                <p>Supports XLS, XLSX, and CSV files with company data</p>
                                 <div class="dropzone-divider"><span>or</span></div>
                                 <button class="btn btn-primary" id="btnBrowseFiles"><i class="fas fa-folder-open"></i> Browse Files</button>
-                                <input type="file" id="fileInput" multiple accept=".pdf,.xls,.xlsx,.csv" hidden>
+                                <input type="file" id="fileInput" accept=".xls,.xlsx,.csv" hidden>
                             </div>
                         </div>
-                        <div class="upload-options">
-                            <div class="form-group">
-                                <label><i class="fas fa-tags"></i> Document Type</label>
-                                <select id="docTypeSelect" class="form-control">
-                                    <option value="income_statement">Income Statement</option>
-                                    <option value="balance_sheet">Balance Sheet</option>
-                                    <option value="cash_flow">Cash Flow Statement</option>
-                                    <option value="trial_balance">Trial Balance</option>
-                                    <option value="general_ledger">General Ledger</option>
-                                    <option value="other">Other Financial Document</option>
+                        <!-- Import Preview -->
+                        <div id="importPreviewSection" style="display:none;">
+                            <div class="card-header" style="margin-top:16px;">
+                                <h3><i class="fas fa-eye"></i> Import Preview</h3>
+                                <div style="display:flex;gap:8px;align-items:center;">
+                                    <span class="badge" id="importRowCount">0 rows</span>
+                                    <span class="badge" id="importColCount">0 columns</span>
+                                </div>
+                            </div>
+                            <div class="form-group" style="margin:12px 0;">
+                                <label><i class="fas fa-key"></i> Company Name Column</label>
+                                <select id="companyNameColumn" class="form-control">
+                                    <option value="">-- Select the column containing company names --</option>
                                 </select>
+                                <span class="form-hint">Select which column contains the company names for enrichment</span>
                             </div>
-                            <div class="form-group">
-                                <label><i class="fas fa-building"></i> Entity / Company Name</label>
-                                <input type="text" id="entityName" class="form-control" placeholder="e.g., Acme Corp">
+                            <div class="export-preview" id="importPreviewTable" style="max-height:400px;overflow:auto;"></div>
+                            <div class="upload-actions" style="margin-top:16px;">
+                                <button class="btn btn-secondary" id="btnClearImport"><i class="fas fa-trash"></i> Clear</button>
+                                <button class="btn btn-primary btn-lg" id="btnConfirmImport" disabled>
+                                    <i class="fas fa-check"></i> Confirm Import (<span id="confirmImportCount">0</span> companies)
+                                </button>
                             </div>
-                            <div class="form-group">
-                                <label><i class="fas fa-calendar"></i> Reporting Period</label>
-                                <input type="text" id="reportingPeriod" class="form-control" placeholder="e.g., Q4 2024">
-                            </div>
-                            <input type="hidden" id="extractionMethod" value="llm">
-                            <div class="form-group">
-                                <label><i class="fas fa-pen-fancy"></i> Custom Instructions (Optional)</label>
-                                <textarea id="customPromptInput" class="form-control" rows="3" placeholder="Add additional instructions for the LLM extraction, e.g.:&#10;&#10;Focus on revenue recognition and EBITDA adjustments. Include any add-backs or one-time items."></textarea>
-                                <span class="form-hint">These instructions will be appended to the extraction prompt sent to the LLM.</span>
-                            </div>
-                        </div>
-                        <!-- Status Polling Progress (shown during extraction) -->
-                        <div class="status-poll-section" id="statusPollSection" style="display:none;">
-                            <div class="status-poll-header">
-                                <i class="fas fa-satellite-dish"></i>
-                                <strong>Auto-Status Polling</strong>
-                                <span class="status-poll-badge" id="statusPollBadge">Waiting...</span>
-                            </div>
-                            <div class="status-poll-log" id="statusPollLog"></div>
-                        </div>
-                        <div class="upload-actions">
-                            <button class="btn btn-primary btn-lg" id="btnSubmitExtraction" disabled>
-                                <i class="fas fa-rocket"></i> Submit for Extraction
-                            </button>
                         </div>
                     </div>
                 </div>
                 <div class="upload-sidebar">
                     <div class="card">
-                        <div class="card-header"><h3><i class="fas fa-list"></i> File Queue</h3><button class="btn btn-sm btn-ghost" id="btnClearQueue">Clear All</button></div>
-                        <div class="file-queue" id="fileQueue"><div class="empty-state small"><i class="fas fa-inbox"></i><p>No files queued</p></div></div>
+                        <div class="card-header"><h3><i class="fas fa-info-circle"></i> Import Guide</h3></div>
+                        <div style="padding:16px;font-size:13px;line-height:1.6;">
+                            <p><strong>Supported formats:</strong> Excel (.xlsx, .xls) and CSV (.csv)</p>
+                            <p><strong>Expected data:</strong> A list of private companies with at least a company name column.</p>
+                            <p><strong>Tips:</strong></p>
+                            <ul style="margin:8px 0;padding-left:20px;">
+                                <li>First row should contain column headers</li>
+                                <li>Include any existing data you have (industry, location, etc.)</li>
+                                <li>The enrichment step will fill in missing data points</li>
+                            </ul>
+                        </div>
                     </div>
                     <div class="card">
-                        <div class="card-header"><h3><i class="fas fa-history"></i> Recent Submissions</h3></div>
-                        <div class="recent-submissions" id="recentSubmissions"><div class="empty-state small"><i class="fas fa-clock"></i><p>No recent submissions</p></div></div>
+                        <div class="card-header"><h3><i class="fas fa-history"></i> Recent Imports</h3></div>
+                        <div class="recent-submissions" id="recentImports"><div class="empty-state small"><i class="fas fa-clock"></i><p>No recent imports</p></div></div>
                     </div>
                 </div>
             </div>
         </section>
 
         <!-- ══════════════════════════════════════════════
-             TAB 2: Review Extractions
+             TAB 2: Enrich Data
              ══════════════════════════════════════════════ -->
-        <section class="tab-content" id="tab-review">
+        <section class="tab-content" id="tab-enrich">
             <div class="tab-header">
-                <h1><i class="fas fa-table"></i> Review Extracted Data</h1>
-                <p>Review, validate, and edit extracted financial datapoints</p>
-            </div>
-            <div class="review-layout">
-                <div class="filter-bar">
-                    <div class="filter-group">
-                        <div class="search-box"><i class="fas fa-search"></i><input type="text" id="reviewSearch" placeholder="Search extractions..."></div>
-                        <select id="reviewStatusFilter" class="form-control">
-                            <option value="all">All Statuses</option><option value="completed">Completed</option><option value="processing">Processing</option><option value="failed">Failed</option><option value="pending">Pending</option>
-                        </select>
-                        <select id="reviewTypeFilter" class="form-control">
-                            <option value="all">All Types</option><option value="income_statement">Income Statement</option><option value="balance_sheet">Balance Sheet</option><option value="cash_flow">Cash Flow</option><option value="trial_balance">Trial Balance</option>
-                        </select>
-                    </div>
-                    <div class="filter-actions"><button class="btn btn-secondary" id="btnRefreshExtractions"><i class="fas fa-sync-alt"></i> Refresh</button></div>
-                </div>
-                <div class="extractions-grid" id="extractionsGrid">
-                    <div class="empty-state"><i class="fas fa-database"></i><h3>No Extractions Found</h3><p>Upload documents to begin extracting financial data</p><button class="btn btn-primary" data-goto="upload"><i class="fas fa-upload"></i> Upload Documents</button></div>
-                </div>
-                <div class="detail-panel" id="detailPanel">
-                    <div class="detail-panel-header"><h2 id="detailTitle">Extraction Details</h2><button class="btn-icon" id="btnCloseDetail"><i class="fas fa-times"></i></button></div>
-                    <div class="detail-panel-body" id="detailBody">
-                        <div class="detail-tabs"><button class="detail-tab active" data-detail="summary">Summary</button><button class="detail-tab" data-detail="mapped">Mapped</button><button class="detail-tab" data-detail="unmapped">Unmapped</button><button class="detail-tab" data-detail="raw">Raw JSON</button></div>
-                        <div class="detail-content" id="detailContent"></div>
-                    </div>
-                    <div class="detail-panel-footer">
-                        <button class="btn btn-secondary" id="btnReprocess"><i class="fas fa-redo"></i> Reprocess</button>
-                        <button class="btn btn-primary" id="btnApproveExtraction"><i class="fas fa-check"></i> Approve</button>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- ══════════════════════════════════════════════
-             TAB 3: Export & Email
-             ══════════════════════════════════════════════ -->
-        <section class="tab-content" id="tab-export">
-            <div class="tab-header">
-                <h1><i class="fas fa-paper-plane"></i> Export &amp; Email</h1>
-                <p>Export extracted data and send via email</p>
+                <h1><i class="fas fa-magic"></i> Enrich Company Data</h1>
+                <p>Use BlueFlame Bot API to enrich your company list with additional data points</p>
             </div>
             <div class="export-layout">
                 <div class="export-main">
                     <div class="card">
-                        <div class="card-header"><h3><i class="fas fa-check-square"></i> Select Data for Export</h3>
-                            <div class="select-actions"><button class="btn btn-sm btn-ghost" id="btnSelectAll">Select All</button><button class="btn btn-sm btn-ghost" id="btnDeselectAll">Deselect All</button></div>
+                        <div class="card-header">
+                            <h3><i class="fas fa-building"></i> Companies to Enrich</h3>
+                            <div class="select-actions">
+                                <button class="btn btn-sm btn-ghost" id="btnSelectAllEnrich">Select All</button>
+                                <button class="btn btn-sm btn-ghost" id="btnDeselectAllEnrich">Deselect All</button>
+                            </div>
                         </div>
-                        <div class="export-selections" id="exportSelections"><div class="empty-state small"><i class="fas fa-database"></i><p>No completed extractions available</p></div></div>
+                        <div id="enrichCompanyList">
+                            <div class="empty-state small"><i class="fas fa-file-import"></i><p>No companies imported yet. Go to Import tab first.</p></div>
+                        </div>
                     </div>
                     <div class="card">
-                        <div class="card-header"><h3><i class="fas fa-eye"></i> Export Preview</h3>
-                            <div class="export-format-selector"><button class="chip active" data-format="table">Table</button><button class="chip" data-format="json">JSON</button><button class="chip" data-format="csv">CSV</button></div>
+                        <div class="card-header">
+                            <h3><i class="fas fa-satellite-dish"></i> Enrichment Progress</h3>
+                            <span class="badge" id="enrichProgressBadge">Not Started</span>
                         </div>
-                        <div class="export-preview" id="exportPreview"><div class="empty-state small"><i class="fas fa-eye-slash"></i><p>Select extractions to preview</p></div></div>
+                        <div class="status-poll-section" id="enrichPollSection" style="display:block;">
+                            <div class="status-poll-log" id="enrichPollLog">
+                                <div class="empty-state small"><i class="fas fa-rocket"></i><p>Select companies and click "Start Enrichment" to begin</p></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div class="export-sidebar">
                     <div class="card">
-                        <div class="card-header"><h3><i class="fas fa-envelope"></i> Email Configuration</h3></div>
-                        <div class="email-form">
-                            <div class="form-group"><label>To</label><input type="email" id="emailTo" class="form-control" placeholder="recipient@company.com"></div>
-                            <div class="form-group"><label>CC</label><input type="email" id="emailCc" class="form-control" placeholder="cc@company.com"></div>
-                            <div class="form-group"><label>Subject</label><input type="text" id="emailSubject" class="form-control" placeholder="Financial Data Extract"></div>
-                            <div class="form-group"><label>Message</label><textarea id="emailBody" class="form-control" rows="5" placeholder="Please find attached the extracted financial data..."></textarea></div>
-                            <div class="form-group"><label>Attachment Format</label>
-                                <select id="emailFormat" class="form-control"><option value="xlsx">Excel (.xlsx)</option><option value="csv">CSV (.csv)</option><option value="json">JSON (.json)</option><option value="pdf">PDF Report (.pdf)</option></select>
+                        <div class="card-header"><h3><i class="fas fa-cogs"></i> Enrichment Settings</h3></div>
+                        <div style="padding:16px;">
+                            <div class="form-group">
+                                <label><i class="fas fa-list-check"></i> Data Points to Enrich</label>
+                                <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px;">
+                                    <label style="font-size:13px;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="enrich-field-check" value="description" checked> Company Description</label>
+                                    <label style="font-size:13px;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="enrich-field-check" value="industry" checked> Industry / Sector</label>
+                                    <label style="font-size:13px;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="enrich-field-check" value="headquarters" checked> Headquarters</label>
+                                    <label style="font-size:13px;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="enrich-field-check" value="employee_count" checked> Employee Count</label>
+                                    <label style="font-size:13px;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="enrich-field-check" value="revenue_estimate" checked> Revenue Estimate</label>
+                                    <label style="font-size:13px;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="enrich-field-check" value="founded_year" checked> Founded Year</label>
+                                    <label style="font-size:13px;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="enrich-field-check" value="website" checked> Website</label>
+                                    <label style="font-size:13px;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="enrich-field-check" value="key_executives" checked> Key Executives</label>
+                                    <label style="font-size:13px;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="enrich-field-check" value="ownership_type" checked> Ownership Type</label>
+                                </div>
                             </div>
-                            <div class="form-group checkbox-group"><label><input type="checkbox" id="includeOriginal"> Include original documents</label></div>
-                            <button class="btn btn-primary btn-block" id="btnSendEmail"><i class="fas fa-paper-plane"></i> Send Email</button>
-                            <div class="divider-text"><span>or</span></div>
-                            <button class="btn btn-secondary btn-block" id="btnDownloadExport"><i class="fas fa-download"></i> Download Export</button>
+                            <div class="form-group" style="margin-top:12px;">
+                                <label><i class="fas fa-pen-fancy"></i> Custom Instructions (Optional)</label>
+                                <textarea id="enrichCustomPrompt" class="form-control" rows="3" placeholder="Add specific instructions for the enrichment, e.g.:&#10;&#10;Focus on SaaS companies in healthcare. Include funding information if available."></textarea>
+                                <span class="form-hint">These instructions will be appended to the enrichment prompt sent to the Bot API.</span>
+                            </div>
+                            <button class="btn btn-primary btn-block" id="btnStartEnrichment" disabled style="margin-top:16px;">
+                                <i class="fas fa-rocket"></i> Start Enrichment
+                            </button>
+                            <button class="btn btn-danger btn-block" id="btnStopEnrichment" style="display:none;margin-top:8px;">
+                                <i class="fas fa-stop"></i> Stop Enrichment
+                            </button>
                         </div>
                     </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ══════════════════════════════════════════════
+             TAB 3: Visualize & Export
+             ══════════════════════════════════════════════ -->
+        <section class="tab-content" id="tab-visualize">
+            <div class="tab-header">
+                <h1><i class="fas fa-table"></i> Visualize &amp; Export</h1>
+                <p>View enriched company data and export back to Excel</p>
+            </div>
+            <div class="review-layout" style="flex-direction:column;">
+                <div class="filter-bar">
+                    <div class="filter-group">
+                        <div class="search-box"><i class="fas fa-search"></i><input type="text" id="vizSearch" placeholder="Search companies..."></div>
+                        <select id="vizStatusFilter" class="form-control">
+                            <option value="all">All Statuses</option>
+                            <option value="enriched">Enriched</option>
+                            <option value="pending">Pending</option>
+                            <option value="failed">Failed</option>
+                        </select>
+                    </div>
+                    <div class="filter-actions" style="display:flex;gap:8px;">
+                        <span class="badge" id="vizCompanyCount">0 companies</span>
+                        <button class="btn btn-primary" id="btnExportExcel"><i class="fas fa-file-excel"></i> Export to Excel</button>
+                        <button class="btn btn-secondary" id="btnExportCsv"><i class="fas fa-file-csv"></i> Export CSV</button>
+                        <button class="btn btn-secondary" id="btnExportJson"><i class="fas fa-download"></i> Export JSON</button>
+                    </div>
+                </div>
+                <div class="card" style="flex:1;">
+                    <div class="export-preview" id="vizTableContainer" style="overflow:auto;max-height:calc(100vh - 260px);">
+                        <div class="empty-state"><i class="fas fa-table"></i><h3>No Company Data</h3><p>Import and enrich companies to see them here</p><button class="btn btn-primary" data-goto="import"><i class="fas fa-file-import"></i> Import Companies</button></div>
+                    </div>
+                </div>
+                <!-- Detail Panel for individual company -->
+                <div class="detail-panel" id="companyDetailPanel">
+                    <div class="detail-panel-header"><h2 id="companyDetailTitle">Company Details</h2><button class="btn-icon" id="btnCloseCompanyDetail"><i class="fas fa-times"></i></button></div>
+                    <div class="detail-panel-body" id="companyDetailBody"></div>
                 </div>
             </div>
         </section>
@@ -586,7 +604,7 @@
                     <div class="config-form">
                         <div class="danger-actions">
                             <div class="danger-item"><div><strong>Reset All Settings</strong><p>Clear all configuration, cached data, and local storage</p></div><button class="btn btn-danger" id="btnResetAll">Reset All</button></div>
-                            <div class="danger-item"><div><strong>Purge Extraction Cache</strong><p>Remove all locally cached extraction results</p></div><button class="btn btn-danger" id="btnPurgeCache">Purge</button></div>
+                            <div class="danger-item"><div><strong>Purge Company Cache</strong><p>Remove all locally cached company and enrichment data</p></div><button class="btn btn-danger" id="btnPurgeCache">Purge</button></div>
                         </div>
                     </div>
                 </div>
