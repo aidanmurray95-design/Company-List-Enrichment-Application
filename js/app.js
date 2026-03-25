@@ -31,6 +31,7 @@
         enrichRunning: false,
         enrichAbort: false,
         // Visualize
+        selectedForVizDelete: new Set(),
         companyDetailOpen: false,
         currentCompany: null,
         // Utility tabs
@@ -356,6 +357,19 @@
         });
         $('#btnStartEnrichment').addEventListener('click', startEnrichment);
         $('#btnStopEnrichment').addEventListener('click', () => { state.enrichAbort = true; });
+        $('#btnBulkDeleteEnrich').addEventListener('click', () => {
+            const count = state.selectedForEnrich.size;
+            if (count === 0) return;
+            if (!confirm(`Delete ${count} selected company${count > 1 ? 'ies' : ''}?`)) return;
+            state.selectedForEnrich.forEach(id => {
+                state.companies = state.companies.filter(c => c.id !== id);
+            });
+            state.selectedForEnrich.clear();
+            saveCompanies();
+            renderEnrichCompanyList();
+            renderVisualizeTable();
+            showToast(`${count} company${count > 1 ? 'ies' : ''} deleted`, 'info');
+        });
     }
 
     function renderEnrichCompanyList() {
@@ -410,6 +424,12 @@
         btn.disabled = state.selectedForEnrich.size === 0 || state.enrichRunning;
         if (!state.enrichRunning) {
             btn.innerHTML = `<i class="fas fa-rocket"></i> Start Enrichment (${state.selectedForEnrich.size})`;
+        }
+        // Show/hide bulk delete
+        const bulkBtn = $('#btnBulkDeleteEnrich');
+        if (bulkBtn) {
+            bulkBtn.style.display = state.selectedForEnrich.size > 0 ? 'inline-flex' : 'none';
+            bulkBtn.innerHTML = `<i class="fas fa-trash-alt"></i> Delete Selected (${state.selectedForEnrich.size})`;
         }
     }
 
@@ -640,6 +660,27 @@
             state.companyDetailOpen = false;
             state.currentCompany = null;
         });
+        $('#btnBulkDeleteViz').addEventListener('click', () => {
+            const count = state.selectedForVizDelete.size;
+            if (count === 0) return;
+            if (!confirm(`Delete ${count} selected company${count > 1 ? 'ies' : ''}?`)) return;
+            state.selectedForVizDelete.forEach(id => {
+                state.companies = state.companies.filter(c => c.id !== id);
+            });
+            state.selectedForVizDelete.clear();
+            saveCompanies();
+            renderVisualizeTable();
+            renderEnrichCompanyList();
+            showToast(`${count} company${count > 1 ? 'ies' : ''} deleted`, 'info');
+        });
+    }
+
+    function updateVizBulkDelete() {
+        const btn = $('#btnBulkDeleteViz');
+        if (btn) {
+            btn.style.display = state.selectedForVizDelete.size > 0 ? 'inline-flex' : 'none';
+            $('#vizDeleteCount').textContent = state.selectedForVizDelete.size;
+        }
     }
 
     function renderVisualizeTable() {
@@ -657,7 +698,13 @@
             return true;
         });
 
+        // Clean up stale selections
+        state.selectedForVizDelete.forEach(id => {
+            if (!state.companies.find(c => c.id === id)) state.selectedForVizDelete.delete(id);
+        });
+
         $('#vizCompanyCount').textContent = `${filtered.length} companies`;
+        updateVizBulkDelete();
 
         if (filtered.length === 0) {
             container.innerHTML = '<div class="empty-state"><i class="fas fa-table"></i><h3>No Company Data</h3><p>Import and enrich companies to see them here</p><button class="btn btn-primary" data-goto="import"><i class="fas fa-file-import"></i> Import Companies</button></div>';
@@ -672,9 +719,11 @@
         });
         const columns = Array.from(colSet);
 
+        const allChecked = filtered.length > 0 && filtered.every(c => state.selectedForVizDelete.has(c.id));
+
         let html = '<table class="preview-table"><thead><tr>';
-        html += '<th style="position:sticky;left:0;z-index:2;background:var(--bg-card);">#</th>';
-        html += '<th style="position:sticky;left:30px;z-index:2;background:var(--bg-card);min-width:180px;">Company Name</th>';
+        html += `<th style="position:sticky;left:0;z-index:2;background:var(--bg-card);width:32px;"><input type="checkbox" id="vizSelectAll" ${allChecked ? 'checked' : ''} title="Select all"></th>`;
+        html += '<th style="position:sticky;left:32px;z-index:2;background:var(--bg-card);min-width:180px;">Company Name</th>';
         html += '<th>Status</th>';
         columns.forEach(col => {
             html += `<th>${escapeHtml(col)}</th>`;
@@ -684,9 +733,10 @@
 
         filtered.forEach((c, idx) => {
             const statusBadge = getEnrichStatusBadge(c.enrichStatus);
+            const rowChecked = state.selectedForVizDelete.has(c.id) ? 'checked' : '';
             html += `<tr class="viz-company-row" data-id="${c.id}" style="cursor:pointer;">`;
-            html += `<td style="position:sticky;left:0;background:var(--bg-card);font-size:11px;color:var(--text-tertiary);">${idx + 1}</td>`;
-            html += `<td style="position:sticky;left:30px;background:var(--bg-card);font-weight:600;">${escapeHtml(c.name)}</td>`;
+            html += `<td style="position:sticky;left:0;background:var(--bg-card);"><input type="checkbox" class="viz-row-check" data-id="${c.id}" ${rowChecked}></td>`;
+            html += `<td style="position:sticky;left:32px;background:var(--bg-card);font-weight:600;">${escapeHtml(c.name)}</td>`;
             html += `<td>${statusBadge}</td>`;
             columns.forEach(col => {
                 // Enriched data takes priority, fall back to original
@@ -702,10 +752,40 @@
         html += '</tbody></table>';
         container.innerHTML = html;
 
-        // Click row to open detail (but not when clicking delete)
+        // Select-all checkbox
+        const selectAllCb = container.querySelector('#vizSelectAll');
+        if (selectAllCb) {
+            selectAllCb.addEventListener('change', (e) => {
+                e.stopPropagation();
+                if (selectAllCb.checked) {
+                    filtered.forEach(c => state.selectedForVizDelete.add(c.id));
+                } else {
+                    filtered.forEach(c => state.selectedForVizDelete.delete(c.id));
+                }
+                // Update row checkboxes without full re-render
+                container.querySelectorAll('.viz-row-check').forEach(cb => { cb.checked = selectAllCb.checked; });
+                updateVizBulkDelete();
+            });
+        }
+
+        // Row checkboxes
+        container.querySelectorAll('.viz-row-check').forEach(cb => {
+            cb.addEventListener('change', (e) => {
+                e.stopPropagation();
+                const id = cb.dataset.id;
+                if (cb.checked) state.selectedForVizDelete.add(id);
+                else state.selectedForVizDelete.delete(id);
+                // Sync select-all state
+                if (selectAllCb) selectAllCb.checked = filtered.every(c => state.selectedForVizDelete.has(c.id));
+                updateVizBulkDelete();
+            });
+            cb.addEventListener('click', (e) => e.stopPropagation());
+        });
+
+        // Click row to open detail (but not when clicking delete or checkbox)
         container.querySelectorAll('.viz-company-row').forEach(row => {
             row.addEventListener('click', (e) => {
-                if (e.target.closest('.btn-delete-viz')) return;
+                if (e.target.closest('.btn-delete-viz') || e.target.closest('input[type="checkbox"]')) return;
                 const company = state.companies.find(c => c.id === row.dataset.id);
                 if (company) openCompanyDetail(company);
             });

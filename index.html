@@ -166,6 +166,7 @@
                             <div class="select-actions">
                                 <button class="btn btn-sm btn-ghost" id="btnSelectAllEnrich">Select All</button>
                                 <button class="btn btn-sm btn-ghost" id="btnDeselectAllEnrich">Deselect All</button>
+                                <button class="btn btn-sm btn-danger" id="btnBulkDeleteEnrich" style="display:none;"><i class="fas fa-trash-alt"></i> Delete Selected</button>
                             </div>
                         </div>
                         <div id="enrichCompanyList">
@@ -237,8 +238,9 @@
                             <option value="failed">Failed</option>
                         </select>
                     </div>
-                    <div class="filter-actions" style="display:flex;gap:8px;">
+                    <div class="filter-actions" style="display:flex;gap:8px;align-items:center;">
                         <span class="badge" id="vizCompanyCount">0 companies</span>
+                        <button class="btn btn-sm btn-danger" id="btnBulkDeleteViz" style="display:none;"><i class="fas fa-trash-alt"></i> Delete Selected (<span id="vizDeleteCount">0</span>)</button>
                         <button class="btn btn-primary" id="btnExportExcel"><i class="fas fa-file-excel"></i> Export to Excel</button>
                         <button class="btn btn-secondary" id="btnExportCsv"><i class="fas fa-file-csv"></i> Export CSV</button>
                         <button class="btn btn-secondary" id="btnExportJson"><i class="fas fa-download"></i> Export JSON</button>
