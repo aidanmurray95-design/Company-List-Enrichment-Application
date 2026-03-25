@@ -118,6 +118,14 @@
                                 </select>
                                 <span class="form-hint">Select which column contains the company names for enrichment</span>
                             </div>
+                            <!-- Column Mapping -->
+                            <div id="columnMappingSection" style="display:none;margin:12px 0;">
+                                <div class="card-header" style="margin-bottom:8px;">
+                                    <h3><i class="fas fa-columns"></i> Column Mapping</h3>
+                                    <span class="form-hint">Rename columns or reassign data to different column names</span>
+                                </div>
+                                <div id="columnMappingGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px;"></div>
+                            </div>
                             <div class="export-preview" id="importPreviewTable" style="max-height:400px;overflow:auto;"></div>
                             <div class="upload-actions" style="margin-top:16px;">
                                 <button class="btn btn-secondary" id="btnClearImport"><i class="fas fa-trash"></i> Clear</button>

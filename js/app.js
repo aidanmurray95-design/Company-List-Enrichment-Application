@@ -26,6 +26,7 @@
         importedRows: [],
         companyNameColIndex: -1,
         importFileName: '',
+        columnMapping: [], // array of { original: string, mapped: string }
         // Enrich
         selectedForEnrich: new Set(),
         enrichRunning: false,
@@ -200,29 +201,26 @@
             state.importedRows = rows;
             state.importFileName = file.name;
             state.companyNameColIndex = -1;
+            state.columnMapping = headers.map(h => ({ original: h, mapped: h }));
 
             // Show preview
             $('#importPreviewSection').style.display = 'block';
             $('#importRowCount').textContent = `${rows.length} rows`;
             $('#importColCount').textContent = `${headers.length} columns`;
 
-            // Populate company name column dropdown
-            const select = $('#companyNameColumn');
-            select.innerHTML = '<option value="">-- Select the column containing company names --</option>';
-            headers.forEach((h, i) => {
-                const opt = document.createElement('option');
-                opt.value = i;
-                opt.textContent = h;
-                select.appendChild(opt);
-            });
+            // Render column mapping UI
+            renderColumnMapping();
+
+            // Populate company name column dropdown (uses mapped names)
+            populateCompanyNameDropdown();
 
             // Auto-detect company name column
-            const autoIdx = headers.findIndex(h => {
+            const autoIdx = getMappedHeaders().findIndex(h => {
                 const l = h.toLowerCase();
                 return l.includes('company') || l.includes('name') || l.includes('firm') || l.includes('business') || l.includes('organization') || l.includes('entity');
             });
             if (autoIdx >= 0) {
-                select.value = autoIdx;
+                $('#companyNameColumn').value = autoIdx;
                 state.companyNameColIndex = autoIdx;
             }
 
@@ -234,15 +232,74 @@
         }
     }
 
+    /** Get the current mapped header names */
+    function getMappedHeaders() {
+        return state.columnMapping.map(m => m.mapped);
+    }
+
+    /** Populate the company name dropdown from mapped headers */
+    function populateCompanyNameDropdown() {
+        const select = $('#companyNameColumn');
+        const prevVal = select.value;
+        select.innerHTML = '<option value="">-- Select the column containing company names --</option>';
+        getMappedHeaders().forEach((h, i) => {
+            const opt = document.createElement('option');
+            opt.value = i;
+            opt.textContent = h;
+            select.appendChild(opt);
+        });
+        // Restore previous selection if still valid
+        if (prevVal !== '' && parseInt(prevVal) < state.columnMapping.length) {
+            select.value = prevVal;
+        }
+    }
+
+    /** Render the column mapping grid with editable dropdowns */
+    function renderColumnMapping() {
+        const grid = $('#columnMappingGrid');
+        const section = $('#columnMappingSection');
+        if (!grid || !section) return;
+
+        section.style.display = 'block';
+
+        grid.innerHTML = state.columnMapping.map((col, i) => {
+            const changed = col.original !== col.mapped;
+            const borderStyle = changed ? 'border:1px solid var(--color-brand);' : 'border:1px solid var(--border-color);';
+            return `<div class="col-map-item" style="${borderStyle}border-radius:8px;padding:10px;background:var(--bg-main);">
+                <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:4px;">Column ${i + 1}: <strong>${escapeHtml(col.original)}</strong></div>
+                <input type="text" class="form-control col-map-input" data-idx="${i}" value="${escapeAttr(col.mapped)}" placeholder="Column name" style="font-size:13px;">
+                ${changed ? '<div style="font-size:10px;color:var(--color-brand);margin-top:3px;"><i class="fas fa-arrow-right"></i> Renamed from "' + escapeHtml(col.original) + '"</div>' : ''}
+            </div>`;
+        }).join('');
+
+        grid.querySelectorAll('.col-map-input').forEach(input => {
+            input.addEventListener('change', () => {
+                const idx = parseInt(input.dataset.idx);
+                const newName = input.value.trim();
+                if (newName) {
+                    state.columnMapping[idx].mapped = newName;
+                } else {
+                    // Revert to original if cleared
+                    state.columnMapping[idx].mapped = state.columnMapping[idx].original;
+                    input.value = state.columnMapping[idx].original;
+                }
+                populateCompanyNameDropdown();
+                renderImportPreview();
+                renderColumnMapping();
+            });
+        });
+    }
+
     function renderImportPreview() {
         const container = $('#importPreviewTable');
-        const headers = state.importedHeaders;
+        const headers = getMappedHeaders();
         const rows = state.importedRows.slice(0, 50); // Preview first 50 rows
 
         let html = '<table class="preview-table"><thead><tr>';
         html += '<th>#</th>';
         headers.forEach((h, i) => {
-            const highlight = i === state.companyNameColIndex ? ' style="background:var(--color-brand);color:#fff;"' : '';
+            const isRenamed = state.columnMapping[i] && state.columnMapping[i].original !== state.columnMapping[i].mapped;
+            const highlight = i === state.companyNameColIndex ? ' style="background:var(--color-brand);color:#fff;"' : (isRenamed ? ' style="color:var(--color-brand);font-style:italic;"' : '');
             html += `<th${highlight}>${escapeHtml(h)}</th>`;
         });
         html += '</tr></thead><tbody>';
@@ -273,7 +330,7 @@
     function confirmImport() {
         if (state.companyNameColIndex < 0 || state.importedRows.length === 0) return;
 
-        const headers = state.importedHeaders;
+        const headers = getMappedHeaders();
         const nameCol = state.companyNameColIndex;
         const newCompanies = [];
 
@@ -335,9 +392,12 @@
         state.importedRows = [];
         state.companyNameColIndex = -1;
         state.importFileName = '';
+        state.columnMapping = [];
         $('#importPreviewSection').style.display = 'none';
         $('#importPreviewTable').innerHTML = '';
         $('#companyNameColumn').innerHTML = '<option value="">-- Select the column containing company names --</option>';
+        const mappingSection = $('#columnMappingSection');
+        if (mappingSection) mappingSection.style.display = 'none';
     }
 
     function renderRecentImports() {
@@ -445,22 +505,23 @@
 
     /**
      * Logically determine the company name from a row record.
+     * The company name must be a real string like "Ally Health Care",
+     * NEVER a number like "239324" or a record ID.
      *
      * Strategy (in priority order):
      *   1. Check fullRowData for a column whose header looks like a company
-     *      name field (company, name, firm, business, entity, organization,
-     *      portfolio company, target, investee). Prefer columns closer to
-     *      the left (lower index) since spreadsheets typically put the
-     *      company name in one of the first columns.
-     *   2. If no header matches, take the first non-numeric, non-date,
-     *      non-trivial string value from the left side of the row — this
-     *      is the most likely candidate for a company name.
-     *   3. Fall back to the stored company.name from the import step.
+     *      name field. Prefer columns closer to the left. Only accept if
+     *      the value passes looksLikeCompanyName().
+     *   2. Scan all values left to right — take the first value that
+     *      passes looksLikeCompanyName().
+     *   3. If company.name passes validation, use it.
+     *   4. Return null — the enrichment should skip this record.
+     *
+     * Does NOT default to company.name if it looks like a number/ID.
      */
     function resolveCompanyName(company) {
         const row = company.fullRowData || {};
         const entries = Object.entries(row);
-        if (entries.length === 0) return company.name;
 
         // Keywords that signal a company-name column header
         const nameKeywords = [
@@ -476,31 +537,52 @@
             const h = header.toLowerCase().trim();
             if (nameKeywords.some(kw => h === kw || h.includes(kw))) {
                 const v = String(value).trim();
-                if (v && !looksNumericOrDate(v)) return v;
+                if (looksLikeCompanyName(v)) return v;
             }
         }
 
-        // 2. No header matched — take the first plausible string value
-        //    from the left side of the row (first 3 columns)
-        for (const [, value] of entries.slice(0, 3)) {
+        // 2. No header matched — scan all values left to right
+        //    for the first value that looks like a company name.
+        //    Company names are typically in the leftmost columns.
+        for (const [, value] of entries) {
             const v = String(value).trim();
-            if (v && v.length >= 2 && !looksNumericOrDate(v)) return v;
+            if (looksLikeCompanyName(v)) return v;
         }
 
-        // 3. Fallback
-        return company.name;
+        // 3. Check company.name only if it passes validation
+        if (looksLikeCompanyName(company.name)) return company.name;
+
+        // 4. Could not determine a valid company name
+        return null;
     }
 
-    /** Returns true if a value looks like a number, date, ID, or trivial data */
-    function looksNumericOrDate(v) {
-        if (!v) return true;
-        // Pure number (with optional commas, decimals, currency symbols)
-        if (/^[\s$€£¥]*[-+]?[\d,]+\.?\d*%?\s*$/.test(v)) return true;
-        // Date patterns (MM/DD/YYYY, YYYY-MM-DD, etc.)
-        if (/^\d{1,4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,4}$/.test(v)) return true;
-        // Very short values likely to be codes/IDs (1-2 chars)
-        if (v.length <= 1) return true;
-        return false;
+    /**
+     * Returns true if a value looks like a real company name.
+     * A company name:
+     *   - Contains at least one letter (not purely numeric)
+     *   - Is at least 2 characters long
+     *   - Is not a pure number, date, currency amount, or ID
+     *   - Is not an email address or URL
+     */
+    function looksLikeCompanyName(v) {
+        if (!v || typeof v !== 'string') return false;
+        const s = v.trim();
+        if (s.length < 2) return false;
+        // Must contain at least one letter
+        if (!/[a-zA-Z]/.test(s)) return false;
+        // Reject pure numbers with optional formatting ($, commas, %, etc.)
+        if (/^[\s$€£¥]*[-+]?[\d,]+\.?\d*%?\s*$/.test(s)) return false;
+        // Reject dates (MM/DD/YYYY, YYYY-MM-DD, etc.)
+        if (/^\d{1,4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,4}$/.test(s)) return false;
+        // Reject email addresses
+        if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) return false;
+        // Reject URLs
+        if (/^https?:\/\//i.test(s)) return false;
+        // Reject values that are mostly digits (e.g. "ID12345", "239324A")
+        const digitCount = (s.match(/\d/g) || []).length;
+        const letterCount = (s.match(/[a-zA-Z]/g) || []).length;
+        if (digitCount > 0 && digitCount > letterCount * 2) return false;
+        return true;
     }
 
     async function startEnrichment() {
@@ -536,6 +618,15 @@
             try {
                 // Logically determine the company name from the full row record
                 const companyName = resolveCompanyName(company);
+
+                if (!companyName) {
+                    addEnrichLog('fa-exclamation-triangle', `[${i + 1}/${companiesToEnrich.length}] Skipped: "${company.name}" — could not determine a valid company name (value looks like a number or ID)`, 'poll-warning');
+                    company.enrichStatus = 'failed';
+                    failCount++;
+                    saveCompanies();
+                    continue;
+                }
+
                 addEnrichLog('fa-building', `[${i + 1}/${companiesToEnrich.length}] Enriching: ${companyName}${companyName !== company.name ? ' (resolved from row)' : ''}...`, '');
 
                 const message = `@Grata give me the key details for ${companyName}`;
