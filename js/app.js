@@ -443,6 +443,66 @@
         }
     }
 
+    /**
+     * Logically determine the company name from a row record.
+     *
+     * Strategy (in priority order):
+     *   1. Check fullRowData for a column whose header looks like a company
+     *      name field (company, name, firm, business, entity, organization,
+     *      portfolio company, target, investee). Prefer columns closer to
+     *      the left (lower index) since spreadsheets typically put the
+     *      company name in one of the first columns.
+     *   2. If no header matches, take the first non-numeric, non-date,
+     *      non-trivial string value from the left side of the row — this
+     *      is the most likely candidate for a company name.
+     *   3. Fall back to the stored company.name from the import step.
+     */
+    function resolveCompanyName(company) {
+        const row = company.fullRowData || {};
+        const entries = Object.entries(row);
+        if (entries.length === 0) return company.name;
+
+        // Keywords that signal a company-name column header
+        const nameKeywords = [
+            'company', 'company name', 'company_name', 'companyname',
+            'name', 'firm', 'firm name', 'business', 'business name',
+            'entity', 'entity name', 'organization', 'org',
+            'portfolio company', 'portfolio', 'target', 'target name',
+            'investee', 'issuer', 'borrower', 'counterparty', 'account name'
+        ];
+
+        // 1. Match by header — scan left to right, first match wins
+        for (const [header, value] of entries) {
+            const h = header.toLowerCase().trim();
+            if (nameKeywords.some(kw => h === kw || h.includes(kw))) {
+                const v = String(value).trim();
+                if (v && !looksNumericOrDate(v)) return v;
+            }
+        }
+
+        // 2. No header matched — take the first plausible string value
+        //    from the left side of the row (first 3 columns)
+        for (const [, value] of entries.slice(0, 3)) {
+            const v = String(value).trim();
+            if (v && v.length >= 2 && !looksNumericOrDate(v)) return v;
+        }
+
+        // 3. Fallback
+        return company.name;
+    }
+
+    /** Returns true if a value looks like a number, date, ID, or trivial data */
+    function looksNumericOrDate(v) {
+        if (!v) return true;
+        // Pure number (with optional commas, decimals, currency symbols)
+        if (/^[\s$€£¥]*[-+]?[\d,]+\.?\d*%?\s*$/.test(v)) return true;
+        // Date patterns (MM/DD/YYYY, YYYY-MM-DD, etc.)
+        if (/^\d{1,4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,4}$/.test(v)) return true;
+        // Very short values likely to be codes/IDs (1-2 chars)
+        if (v.length <= 1) return true;
+        return false;
+    }
+
     async function startEnrichment() {
         if (state.selectedForEnrich.size === 0) return;
         if (!client.isConfigured()) {
@@ -473,23 +533,12 @@
             }
 
             const company = companiesToEnrich[i];
-            addEnrichLog('fa-building', `[${i + 1}/${companiesToEnrich.length}] Enriching: ${company.name}...`, '');
-
             try {
-                // Build the full row record string from ALL columns so the
-                // company can be logically identified from the complete row.
-                // fullRowData includes the name column with its original header.
-                const rowSource = company.fullRowData || company.originalData || {};
-                const rowFields = Object.entries(rowSource);
-                const rowRecordStr = rowFields.length > 0
-                    ? rowFields.map(([k, v]) => `${k}: ${v}`).join(' | ')
-                    : company.name;
+                // Logically determine the company name from the full row record
+                const companyName = resolveCompanyName(company);
+                addEnrichLog('fa-building', `[${i + 1}/${companiesToEnrich.length}] Enriching: ${companyName}${companyName !== company.name ? ' (resolved from row)' : ''}...`, '');
 
-                // The prompt gives @grata the full row so it can determine
-                // which company this is — the name alone (e.g. "Apple") may
-                // be ambiguous, but the row context (industry, location, etc.)
-                // resolves it.
-                const message = `@grata Give me key details for the company in this row record: ${rowRecordStr}`;
+                const message = `@Grata give me the key details for ${companyName}`;
 
                 // Send bot request
                 const postResult = await client.sendBotRequest(message);
