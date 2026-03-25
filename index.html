@@ -189,23 +189,22 @@
                         <div class="card-header"><h3><i class="fas fa-cogs"></i> Enrichment Settings</h3></div>
                         <div style="padding:16px;">
                             <div class="form-group">
-                                <label><i class="fas fa-list-check"></i> Data Points to Enrich</label>
-                                <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px;">
-                                    <label style="font-size:13px;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="enrich-field-check" value="description" checked> Company Description</label>
-                                    <label style="font-size:13px;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="enrich-field-check" value="industry" checked> Industry / Sector</label>
-                                    <label style="font-size:13px;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="enrich-field-check" value="headquarters" checked> Headquarters</label>
-                                    <label style="font-size:13px;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="enrich-field-check" value="employee_count" checked> Employee Count</label>
-                                    <label style="font-size:13px;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="enrich-field-check" value="revenue_estimate" checked> Revenue Estimate</label>
-                                    <label style="font-size:13px;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="enrich-field-check" value="founded_year" checked> Founded Year</label>
-                                    <label style="font-size:13px;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="enrich-field-check" value="website" checked> Website</label>
-                                    <label style="font-size:13px;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="enrich-field-check" value="key_executives" checked> Key Executives</label>
-                                    <label style="font-size:13px;display:flex;align-items:center;gap:6px;"><input type="checkbox" class="enrich-field-check" value="ownership_type" checked> Ownership Type</label>
+                                <label><i class="fas fa-robot"></i> Enrichment Source</label>
+                                <div style="margin-top:8px;padding:12px;background:var(--bg-main);border-radius:8px;font-size:13px;line-height:1.6;">
+                                    <strong>@grata</strong> via BlueFlame Bot API
+                                    <p style="margin:6px 0 0;color:var(--text-tertiary);font-size:12px;">Each company row is sent as: <code>@grata Give me key details for {Company Name}</code>. The response is parsed for:</p>
+                                    <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;">
+                                        <span class="badge">Description</span>
+                                        <span class="badge">Industry</span>
+                                        <span class="badge">Headquarters</span>
+                                        <span class="badge">Employees</span>
+                                        <span class="badge">Revenue</span>
+                                        <span class="badge">Founded</span>
+                                        <span class="badge">Website</span>
+                                        <span class="badge">Executives</span>
+                                        <span class="badge">Ownership</span>
+                                    </div>
                                 </div>
-                            </div>
-                            <div class="form-group" style="margin-top:12px;">
-                                <label><i class="fas fa-pen-fancy"></i> Custom Instructions (Optional)</label>
-                                <textarea id="enrichCustomPrompt" class="form-control" rows="3" placeholder="Add specific instructions for the enrichment, e.g.:&#10;&#10;Focus on SaaS companies in healthcare. Include funding information if available."></textarea>
-                                <span class="form-hint">These instructions will be appended to the enrichment prompt sent to the Bot API.</span>
                             </div>
                             <button class="btn btn-primary btn-block" id="btnStartEnrichment" disabled style="margin-top:16px;">
                                 <i class="fas fa-rocket"></i> Start Enrichment

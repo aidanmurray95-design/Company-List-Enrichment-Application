@@ -377,16 +377,28 @@
                     <div style="font-weight:600;font-size:13px;">${escapeHtml(c.name)}</div>
                     <div style="font-size:11px;color:var(--text-tertiary);">${existingKeys ? 'Has: ' + escapeHtml(existingKeys) + (Object.keys(c.originalData).length > 3 ? '...' : '') : 'No existing data'} · ${statusBadge}</div>
                 </div>
+                <button class="btn-icon btn-delete-enrich" data-id="${c.id}" title="Delete company"><i class="fas fa-trash-alt"></i></button>
             </div>`;
         }).join('');
 
         container.querySelectorAll('.export-selection-item').forEach(item => {
-            item.addEventListener('click', () => {
+            item.addEventListener('click', (e) => {
+                if (e.target.closest('.btn-delete-enrich')) return;
                 const id = item.dataset.id;
                 if (state.selectedForEnrich.has(id)) state.selectedForEnrich.delete(id);
                 else state.selectedForEnrich.add(id);
                 renderEnrichCompanyList();
                 updateEnrichButton();
+            });
+        });
+
+        container.querySelectorAll('.btn-delete-enrich').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const company = state.companies.find(c => c.id === btn.dataset.id);
+                if (company && confirm(`Delete "${company.name}"?`)) {
+                    deleteCompany(btn.dataset.id);
+                }
             });
         });
 
@@ -399,10 +411,6 @@
         if (!state.enrichRunning) {
             btn.innerHTML = `<i class="fas fa-rocket"></i> Start Enrichment (${state.selectedForEnrich.size})`;
         }
-    }
-
-    function getSelectedEnrichFields() {
-        return Array.from($$('.enrich-field-check:checked')).map(cb => cb.value);
     }
 
     async function startEnrichment() {
@@ -421,8 +429,6 @@
         $('#enrichProgressBadge').textContent = 'Running...';
         $('#enrichProgressBadge').className = 'badge info';
 
-        const fields = getSelectedEnrichFields();
-        const customInstructions = $('#enrichCustomPrompt')?.value?.trim() || '';
         const pollLog = $('#enrichPollLog');
         pollLog.innerHTML = '';
 
@@ -440,22 +446,13 @@
             addEnrichLog('fa-building', `[${i + 1}/${companiesToEnrich.length}] Enriching: ${company.name}...`, '');
 
             try {
-                // Build the enrichment prompt
-                const existingDataStr = Object.keys(company.originalData).length > 0
-                    ? '\nExisting data: ' + Object.entries(company.originalData).map(([k, v]) => `${k}: ${v}`).join(', ')
+                // Build row record string from all original data for context
+                const rowRecord = Object.entries(company.originalData).length > 0
+                    ? Object.entries(company.originalData).map(([k, v]) => `${k}: ${v}`).join(', ')
                     : '';
+                const rowContext = rowRecord ? ` (Row record: ${rowRecord})` : '';
 
-                const fieldsStr = fields.map(f => f.replace(/_/g, ' ')).join(', ');
-
-                const message = `You are a company research assistant. Please enrich the following private company with additional data points.
-
-Company Name: ${company.name}${existingDataStr}
-
-Please provide the following data points: ${fieldsStr}.
-
-Return your response as a JSON object with these exact keys: ${fields.join(', ')}.
-For each field, provide the best available information. If a field is unknown, set its value to null.
-Only return the JSON object, no other text.${customInstructions ? '\n\nAdditional instructions: ' + customInstructions : ''}`;
+                const message = `@grata Give me key details for ${company.name}.${rowContext}`;
 
                 // Send bot request
                 const postResult = await client.sendBotRequest(message);
@@ -549,34 +546,75 @@ Only return the JSON object, no other text.${customInstructions ? '\n\nAdditiona
         log.scrollTop = log.scrollHeight;
     }
 
+    /** Schema fields we expect from the @grata bot response */
+    const ENRICH_SCHEMA = {
+        'Company Description': ['company_description', 'description', 'company description', 'overview', 'summary', 'about'],
+        'Industry / Sector': ['industry_sector', 'industry / sector', 'industry', 'sector', 'industry/sector', 'vertical'],
+        'Headquarters': ['headquarters', 'hq', 'head_quarters', 'location', 'hq_location', 'address', 'city'],
+        'Employee Count': ['employee_count', 'employees', 'employee count', 'headcount', 'num_employees', 'number_of_employees', 'team_size'],
+        'Revenue Estimate': ['revenue_estimate', 'revenue estimate', 'revenue', 'annual_revenue', 'estimated_revenue', 'revenue_range'],
+        'Founded Year': ['founded_year', 'founded year', 'founded', 'year_founded', 'founding_year', 'established'],
+        'Website': ['website', 'url', 'web', 'homepage', 'domain', 'company_url'],
+        'Key Executives': ['key_executives', 'key executives', 'executives', 'leadership', 'management', 'ceo', 'founders', 'key_people'],
+        'Ownership Type': ['ownership_type', 'ownership type', 'ownership', 'company_type', 'type', 'structure', 'entity_type']
+    };
+
+    /**
+     * Parse enrichment output from the @grata bot response.
+     * Extracts JSON from the response and maps keys to our schema.
+     */
     function parseEnrichmentOutput(output) {
         if (output == null) return null;
         let data = output;
 
+        // If string, try to extract JSON
         if (typeof data === 'string') {
             data = extractJsonFromString(data);
             if (data === null) return null;
         }
 
-        // If it's a plain object with enrichment fields, return it
+        // Unwrap nested message/text/response fields
         if (data && typeof data === 'object' && !Array.isArray(data)) {
-            // Filter out meta fields
-            const skip = ['status', 'id', 'call_id', 'user_id', 'metadata', 'error', 'quota', 'session_id'];
-            const result = {};
-            for (const [k, v] of Object.entries(data)) {
-                if (!skip.includes(k) && v != null) {
-                    result[k] = v;
+            const nested = data.message || data.text || data.response || data.answer;
+            if (nested && typeof nested === 'string') {
+                const inner = extractJsonFromString(nested);
+                if (inner && typeof inner === 'object' && !Array.isArray(inner)) {
+                    data = inner;
                 }
             }
-            // Check for nested message/text/response
-            if (Object.keys(result).length <= 2 && (data.message || data.text || data.response)) {
-                const inner = extractJsonFromString(String(data.message || data.text || data.response));
-                if (inner && typeof inner === 'object' && !Array.isArray(inner)) return inner;
-            }
-            return Object.keys(result).length > 0 ? result : null;
         }
 
-        return null;
+        if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+
+        // Map response keys to our schema
+        const result = {};
+        const dataLower = {};
+        for (const [k, v] of Object.entries(data)) {
+            dataLower[k.toLowerCase().trim()] = v;
+        }
+
+        for (const [schemaField, aliases] of Object.entries(ENRICH_SCHEMA)) {
+            let matched = false;
+            for (const alias of aliases) {
+                if (dataLower[alias] != null) {
+                    const val = dataLower[alias];
+                    result[schemaField] = typeof val === 'object' ? JSON.stringify(val) : String(val);
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                // Fuzzy: check if any data key contains the alias or vice versa
+                for (const [dataKey, dataVal] of Object.entries(dataLower)) {
+                    if (aliases.some(a => dataKey.includes(a) || a.includes(dataKey)) && dataVal != null) {
+                        result[schemaField] = typeof dataVal === 'object' ? JSON.stringify(dataVal) : String(dataVal);
+                        break;
+                    }
+                }
+            }
+        }
+
+        return Object.keys(result).length > 0 ? result : null;
     }
 
     function getEnrichStatusBadge(status) {
@@ -641,6 +679,7 @@ Only return the JSON object, no other text.${customInstructions ? '\n\nAdditiona
         columns.forEach(col => {
             html += `<th>${escapeHtml(col)}</th>`;
         });
+        html += '<th style="text-align:center;">Actions</th>';
         html += '</tr></thead><tbody>';
 
         filtered.forEach((c, idx) => {
@@ -657,16 +696,29 @@ Only return the JSON object, no other text.${customInstructions ? '\n\nAdditiona
                 const style = isEnriched ? 'color:var(--color-brand);' : '';
                 html += `<td style="${style}">${escapeHtml(displayVal)}</td>`;
             });
+            html += `<td style="text-align:center;"><button class="btn-icon btn-delete-viz" data-id="${c.id}" title="Delete company"><i class="fas fa-trash-alt"></i></button></td>`;
             html += '</tr>';
         });
         html += '</tbody></table>';
         container.innerHTML = html;
 
-        // Click row to open detail
+        // Click row to open detail (but not when clicking delete)
         container.querySelectorAll('.viz-company-row').forEach(row => {
-            row.addEventListener('click', () => {
+            row.addEventListener('click', (e) => {
+                if (e.target.closest('.btn-delete-viz')) return;
                 const company = state.companies.find(c => c.id === row.dataset.id);
                 if (company) openCompanyDetail(company);
+            });
+        });
+
+        // Delete buttons in table
+        container.querySelectorAll('.btn-delete-viz').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const company = state.companies.find(c => c.id === btn.dataset.id);
+                if (company && confirm(`Delete "${company.name}"?`)) {
+                    deleteCompany(btn.dataset.id);
+                }
             });
         });
     }
@@ -1534,6 +1586,15 @@ Only return the JSON object, no other text.${customInstructions ? '\n\nAdditiona
     // ============================================
     function saveCompanies() {
         localStorage.setItem('bf_companies', JSON.stringify(state.companies));
+    }
+
+    function deleteCompany(id) {
+        state.companies = state.companies.filter(c => c.id !== id);
+        state.selectedForEnrich.delete(id);
+        saveCompanies();
+        renderEnrichCompanyList();
+        renderVisualizeTable();
+        showToast('Company deleted', 'info');
     }
 
     // ============================================
