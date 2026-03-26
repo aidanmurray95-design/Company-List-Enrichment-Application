@@ -198,22 +198,18 @@
                         <div class="card-header"><h3><i class="fas fa-cogs"></i> Enrichment Settings</h3></div>
                         <div style="padding:16px;">
                             <div class="form-group">
-                                <label><i class="fas fa-brain"></i> Enrichment Sources</label>
+                                <label><i class="fas fa-brain"></i> Enrichment Source</label>
                                 <div style="margin-top:8px;padding:12px;background:var(--bg-main);border-radius:8px;font-size:13px;line-height:1.6;">
-                                    <p style="margin:0 0 10px;color:var(--text-tertiary);font-size:12px;">Each company is enriched via <strong>two LLM calls</strong> through <code>POST /functions/llm</code>. Results are merged (Perplexity primary, ChatGPT fills gaps).</p>
                                     <div style="display:flex;align-items:center;gap:8px;">
-                                        <span style="background:linear-gradient(135deg,#1a1a2e,#16213e);color:#00d4ff;padding:4px 10px;border-radius:6px;font-weight:600;font-size:11px;letter-spacing:0.5px;">1. PERPLEXITY</span>
+                                        <span style="background:linear-gradient(135deg,#1a1a2e,#16213e);color:#00d4ff;padding:4px 10px;border-radius:6px;font-weight:600;font-size:11px;letter-spacing:0.5px;">PERPLEXITY</span>
+                                        <span style="color:var(--text-secondary);font-size:12px;">via BlueFlame LLM API</span>
                                     </div>
-                                    <div style="margin-top:6px;padding:8px;background:var(--bg-secondary);border-radius:6px;border-left:3px solid #00d4ff;">
-                                        <code style="font-size:11px;">@Perplexity give me the details for {Name} including Description, Industry, Headquarters, Employees, Revenue, Founded, Website, Executives, Ownership</code>
+                                    <div style="margin-top:8px;padding:8px;background:var(--bg-secondary);border-radius:6px;border-left:3px solid #00d4ff;">
+                                        <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:4px;">PROMPT</div>
+                                        <code style="font-size:11px;">@Perplexity give me the details for {Company Name} including Description, Industry, Headquarters, Employees, Revenue, Founded, Website, Executives, Ownership format the response as a table</code>
                                     </div>
-                                    <div style="display:flex;align-items:center;gap:8px;margin-top:10px;">
-                                        <span style="background:linear-gradient(135deg,#0d9488,#065f46);color:#fff;padding:4px 10px;border-radius:6px;font-weight:600;font-size:11px;letter-spacing:0.5px;">2. CHATGPT</span>
-                                    </div>
-                                    <div style="margin-top:6px;padding:8px;background:var(--bg-secondary);border-radius:6px;border-left:3px solid #0d9488;">
-                                        <code style="font-size:11px;">@Chatgpt give me the details for {Name} including Description, Industry, ... format the response as a table</code>
-                                    </div>
-                                    <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:10px;">
+                                    <p style="margin:8px 0 0;color:var(--text-tertiary);font-size:12px;">Sent via <code>POST /functions/llm</code> with <code>model: "perplexity"</code>. Response (table or markdown) is parsed for:</p>
+                                    <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;">
                                         <span class="badge">Description</span>
                                         <span class="badge">Industry</span>
                                         <span class="badge">Headquarters</span>

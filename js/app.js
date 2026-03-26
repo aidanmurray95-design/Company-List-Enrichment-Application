@@ -717,48 +717,22 @@
 
                 addEnrichLog('fa-building', `[${i + 1}/${companiesToEnrich.length}] Enriching: ${companyName}${companyName !== company.name ? ' (resolved from row)' : ''}...`, '');
 
-                const perplexityPrompt = `@Perplexity give me the details for ${companyName} including Description, Industry, Headquarters, Employees, Revenue, Founded, Website, Executives, Ownership`;
-                const chatgptPrompt = `@Chatgpt give me the details for ${companyName} including Description, Industry, Headquarters, Employees, Revenue, Founded, Website, Executives, Ownership format the response as a table`;
+                const prompt = `@Perplexity give me the details for ${companyName} including Description, Industry, Headquarters, Employees, Revenue, Founded, Website, Executives, Ownership format the response as a table`;
 
-                // ── Call 1: Perplexity ──
                 addEnrichLog('fa-search', `${companyName}: Sending Perplexity request...`, 'poll-info');
-                const perplexityResult = await sendAndPoll(client, perplexityPrompt, 'perplexity', companyName, addEnrichLog);
+                const result = await sendAndPoll(client, prompt, 'perplexity', companyName, addEnrichLog);
+                const enriched = parseEnrichmentOutput(result);
 
-                // ── Call 2: ChatGPT ──
-                addEnrichLog('fa-robot', `${companyName}: Sending ChatGPT request...`, 'poll-info');
-                const chatgptResult = await sendAndPoll(client, chatgptPrompt, 'chatgpt', companyName, addEnrichLog);
-
-                // ── Parse both responses and merge ──
-                const perplexityParsed = parseEnrichmentOutput(perplexityResult);
-                const chatgptParsed = parseEnrichmentOutput(chatgptResult);
-
-                // Merge: Perplexity is primary, ChatGPT fills gaps
-                const merged = {};
-                const allFields = ['Company Description', 'Industry / Sector', 'Headquarters', 'Employee Count', 'Revenue Estimate', 'Founded Year', 'Website', 'Key Executives', 'Ownership Type'];
-                for (const field of allFields) {
-                    merged[field] = (perplexityParsed && perplexityParsed[field])
-                        || (chatgptParsed && chatgptParsed[field])
-                        || null;
-                }
-
-                // Remove null fields
-                for (const k of Object.keys(merged)) {
-                    if (merged[k] === null) delete merged[k];
-                }
-
-                const perplexityCount = perplexityParsed ? Object.keys(perplexityParsed).length : 0;
-                const chatgptCount = chatgptParsed ? Object.keys(chatgptParsed).length : 0;
-
-                if (Object.keys(merged).length > 0) {
-                    company.enrichedData = merged;
+                if (enriched && Object.keys(enriched).length > 0) {
+                    company.enrichedData = enriched;
                     company.enrichStatus = 'enriched';
                     company.enrichedAt = new Date().toISOString();
                     successCount++;
-                    addEnrichLog('fa-check-circle', `${companyName}: Enriched (${Object.keys(merged).length} fields — Perplexity: ${perplexityCount}, ChatGPT: ${chatgptCount})`, 'poll-success');
+                    addEnrichLog('fa-check-circle', `${companyName}: Enriched (${Object.keys(enriched).length} fields)`, 'poll-success');
                 } else {
                     company.enrichStatus = 'failed';
                     failCount++;
-                    addEnrichLog('fa-exclamation-triangle', `${companyName}: Could not parse enrichment data from either source`, 'poll-warning');
+                    addEnrichLog('fa-exclamation-triangle', `${companyName}: Could not parse enrichment data`, 'poll-warning');
                 }
 
                 saveCompanies();
