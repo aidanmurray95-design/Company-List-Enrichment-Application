@@ -628,6 +628,51 @@
         return true;
     }
 
+    /**
+     * Send an LLM request, poll for the result, and return the output string.
+     * Returns the raw output or null if failed.
+     */
+    async function sendAndPoll(client, prompt, model, companyName, log) {
+        try {
+            const postResult = await client.sendLLMRequestModel(model, prompt);
+            if (!postResult.ok) {
+                log('fa-times-circle', `${companyName} [${model}]: API error ${postResult.status}`, 'poll-error');
+                return null;
+            }
+
+            const callId = client._extractCallId(postResult.data);
+            if (callId) {
+                log('fa-satellite-dish', `${companyName} [${model}]: Polling (call_id: ${callId})...`, 'poll-info');
+                const statusResult = await client.pollStatus(callId, (update) => {
+                    log('fa-sync-alt', `${companyName} [${model}]: Poll #${update.attempt} — ${update.status || 'pending'}`, 'poll-info');
+                });
+
+                if (statusResult && (statusResult.ok || statusResult.data?.output != null)) {
+                    const output = statusResult.data?.output;
+                    if (output != null) {
+                        log('fa-check', `${companyName} [${model}]: Response received`, 'poll-success');
+                        return output;
+                    }
+                }
+                log('fa-times-circle', `${companyName} [${model}]: Polling timeout or no output`, 'poll-warning');
+                return null;
+            }
+
+            // No call_id — check for inline response
+            const inline = postResult.data?.output || postResult.data?.message || postResult.data?.text || postResult.data?.response;
+            if (inline) {
+                log('fa-check', `${companyName} [${model}]: Inline response received`, 'poll-success');
+                return inline;
+            }
+
+            log('fa-info-circle', `${companyName} [${model}]: No call_id or inline response`, 'poll-warning');
+            return null;
+        } catch (err) {
+            log('fa-times-circle', `${companyName} [${model}]: Error — ${err.message}`, 'poll-error');
+            return null;
+        }
+    }
+
     async function startEnrichment() {
         if (state.selectedForEnrich.size === 0) return;
         if (!client.isConfigured()) {
@@ -672,66 +717,48 @@
 
                 addEnrichLog('fa-building', `[${i + 1}/${companiesToEnrich.length}] Enriching: ${companyName}${companyName !== company.name ? ' (resolved from row)' : ''}...`, '');
 
-                const message = `@Perplexity give me the details for ${companyName} including Description, Industry, Headquarters, Employees, Revenue, Founded, Website, Executives, Ownership`;
+                const perplexityPrompt = `@Perplexity give me the details for ${companyName} including Description, Industry, Headquarters, Employees, Revenue, Founded, Website, Executives, Ownership`;
+                const chatgptPrompt = `@Chatgpt give me the details for ${companyName} including Description, Industry, Headquarters, Employees, Revenue, Founded, Website, Executives, Ownership format the response as a table`;
 
-                // Send via /functions/llm/model with model: "perplexity"
-                const postResult = await client.sendLLMRequestModel('perplexity', message);
+                // ── Call 1: Perplexity ──
+                addEnrichLog('fa-search', `${companyName}: Sending Perplexity request...`, 'poll-info');
+                const perplexityResult = await sendAndPoll(client, perplexityPrompt, 'perplexity', companyName, addEnrichLog);
 
-                if (!postResult.ok) {
-                    throw new Error(`API error: ${postResult.status} ${postResult.statusText}`);
+                // ── Call 2: ChatGPT ──
+                addEnrichLog('fa-robot', `${companyName}: Sending ChatGPT request...`, 'poll-info');
+                const chatgptResult = await sendAndPoll(client, chatgptPrompt, 'chatgpt', companyName, addEnrichLog);
+
+                // ── Parse both responses and merge ──
+                const perplexityParsed = parseEnrichmentOutput(perplexityResult);
+                const chatgptParsed = parseEnrichmentOutput(chatgptResult);
+
+                // Merge: Perplexity is primary, ChatGPT fills gaps
+                const merged = {};
+                const allFields = ['Company Description', 'Industry / Sector', 'Headquarters', 'Employee Count', 'Revenue Estimate', 'Founded Year', 'Website', 'Key Executives', 'Ownership Type'];
+                for (const field of allFields) {
+                    merged[field] = (perplexityParsed && perplexityParsed[field])
+                        || (chatgptParsed && chatgptParsed[field])
+                        || null;
                 }
 
-                const callId = client._extractCallId(postResult.data);
-                company.enrichCallId = callId;
+                // Remove null fields
+                for (const k of Object.keys(merged)) {
+                    if (merged[k] === null) delete merged[k];
+                }
 
-                if (callId) {
-                    addEnrichLog('fa-satellite-dish', `Polling status for ${company.name} (call_id: ${callId})...`, 'poll-info');
+                const perplexityCount = perplexityParsed ? Object.keys(perplexityParsed).length : 0;
+                const chatgptCount = chatgptParsed ? Object.keys(chatgptParsed).length : 0;
 
-                    const statusResult = await client.pollStatus(callId, (update) => {
-                        addEnrichLog('fa-sync-alt', `${company.name}: Poll #${update.attempt} — ${update.status || 'pending'}`, 'poll-info');
-                    });
-
-                    if (statusResult && (statusResult.ok || statusResult.data?.output != null)) {
-                        const output = statusResult.data?.output;
-                        const enriched = parseEnrichmentOutput(output);
-
-                        if (enriched && Object.keys(enriched).length > 0) {
-                            company.enrichedData = enriched;
-                            company.enrichStatus = 'enriched';
-                            company.enrichedAt = new Date().toISOString();
-                            successCount++;
-                            addEnrichLog('fa-check-circle', `${company.name}: Enriched successfully (${Object.keys(enriched).length} fields)`, 'poll-success');
-                        } else {
-                            company.enrichStatus = 'failed';
-                            failCount++;
-                            addEnrichLog('fa-exclamation-triangle', `${company.name}: Could not parse enrichment data`, 'poll-warning');
-                        }
-                    } else {
-                        company.enrichStatus = 'failed';
-                        failCount++;
-                        addEnrichLog('fa-times-circle', `${company.name}: Polling timeout or error`, 'poll-error');
-                    }
+                if (Object.keys(merged).length > 0) {
+                    company.enrichedData = merged;
+                    company.enrichStatus = 'enriched';
+                    company.enrichedAt = new Date().toISOString();
+                    successCount++;
+                    addEnrichLog('fa-check-circle', `${companyName}: Enriched (${Object.keys(merged).length} fields — Perplexity: ${perplexityCount}, ChatGPT: ${chatgptCount})`, 'poll-success');
                 } else {
-                    // Try to parse inline response
-                    const inlineOutput = postResult.data?.output || postResult.data?.message || postResult.data?.text || postResult.data?.response;
-                    if (inlineOutput) {
-                        const enriched = parseEnrichmentOutput(inlineOutput);
-                        if (enriched && Object.keys(enriched).length > 0) {
-                            company.enrichedData = enriched;
-                            company.enrichStatus = 'enriched';
-                            company.enrichedAt = new Date().toISOString();
-                            successCount++;
-                            addEnrichLog('fa-check-circle', `${company.name}: Enriched from inline response`, 'poll-success');
-                        } else {
-                            company.enrichStatus = 'failed';
-                            failCount++;
-                            addEnrichLog('fa-exclamation-triangle', `${company.name}: No call_id and could not parse inline response`, 'poll-warning');
-                        }
-                    } else {
-                        company.enrichStatus = 'failed';
-                        failCount++;
-                        addEnrichLog('fa-info-circle', `${company.name}: No call_id returned`, 'poll-warning');
-                    }
+                    company.enrichStatus = 'failed';
+                    failCount++;
+                    addEnrichLog('fa-exclamation-triangle', `${companyName}: Could not parse enrichment data from either source`, 'poll-warning');
                 }
 
                 saveCompanies();
@@ -856,13 +883,11 @@
             .replace(/\s+/g, ' ')
             .trim();
 
-        // Step 1: Extract all **Label:** Value pairs from bullet points
-        // Matches: "- **Label:** Value" or "- **Label**: Value"
+        // Step 1: Extract all "- **Label:** Value" bullet pairs
         const bulletPattern = /[-*]\s*\*\*([^*]+)\*\*[:\s]+(.+?)(?=\n[-*]\s*\*\*|\n\n|\n<p>|$)/gs;
         const extracted = {};
         let match;
         while ((match = bulletPattern.exec(text)) !== null) {
-            // Strip trailing colon from label
             const label = match[1].trim().replace(/:+$/, '').toLowerCase();
             const value = clean(match[2]);
             if (value && value.length > 1) {
@@ -871,13 +896,27 @@
         }
 
         // Also extract **Section Header:**\n\nParagraph content
-        // (Perplexity puts Executives and Ownership as standalone sections)
         const sectionPattern = /\*\*([^*]+)\*\*[:\s]*\n\n([^*\n][^\n]+)/g;
         while ((match = sectionPattern.exec(text)) !== null) {
             const label = match[1].trim().replace(/:+$/, '').toLowerCase();
             const value = clean(match[2]);
             if (value && value.length > 5 && !extracted[label]) {
                 extracted[label] = value;
+            }
+        }
+
+        // Also extract markdown table rows: | Label | Value |
+        // ChatGPT returns data as tables with | Field | Details | format
+        const tableRowPattern = /\|\s*\*?\*?([^|*]+?)\*?\*?\s*\|\s*([^|]+?)\s*\|/g;
+        while ((match = tableRowPattern.exec(text)) !== null) {
+            const label = match[1].trim().replace(/:+$/, '').toLowerCase();
+            const value = clean(match[2]);
+            // Skip header/separator rows
+            if (label && value && value.length > 1 && !label.includes('---') && !value.includes('---')
+                && label !== 'field' && label !== 'category' && label !== 'detail' && label !== 'details' && label !== 'attribute') {
+                if (!extracted[label]) {
+                    extracted[label] = value;
+                }
             }
         }
 
