@@ -188,7 +188,16 @@
                 const json = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
                 if (json.length > 0) {
                     headers = json[0].map(h => String(h).trim());
-                    rows = json.slice(1).filter(row => row.some(cell => cell !== ''));
+                    // Keep any row that has at least one non-empty cell
+                    // (handle 0, false, and other falsy-but-valid values)
+                    rows = json.slice(1).filter(row =>
+                        row.some(cell => cell != null && String(cell).trim() !== '')
+                    );
+                    // Pad short rows to match header count so column indices align
+                    rows = rows.map(row => {
+                        while (row.length < headers.length) row.push('');
+                        return row;
+                    });
                 }
             }
 
@@ -322,9 +331,17 @@
 
     function updateConfirmButton() {
         const btn = $('#btnConfirmImport');
-        const valid = state.companyNameColIndex >= 0 && state.importedRows.length > 0;
-        btn.disabled = !valid;
-        $('#confirmImportCount').textContent = valid ? state.importedRows.length : 0;
+        const nameCol = state.companyNameColIndex;
+        const valid = nameCol >= 0 && state.importedRows.length > 0;
+        // Count rows that actually have a value in the company name column
+        const importableCount = valid
+            ? state.importedRows.filter(row => {
+                const val = Array.isArray(row) ? row[nameCol] : null;
+                return val != null && String(val).trim() !== '';
+            }).length
+            : 0;
+        btn.disabled = importableCount === 0;
+        $('#confirmImportCount').textContent = importableCount;
     }
 
     function confirmImport() {
@@ -333,24 +350,45 @@
         const headers = getMappedHeaders();
         const nameCol = state.companyNameColIndex;
         const newCompanies = [];
+        let skipped = 0;
 
-        state.importedRows.forEach((row, idx) => {
-            const name = row[nameCol] != null ? String(row[nameCol]).trim() : '';
-            if (!name) return;
+        for (let idx = 0; idx < state.importedRows.length; idx++) {
+            const row = state.importedRows[idx];
+
+            // Safely extract the company name — handle sparse rows,
+            // numeric values, and cells that may be undefined
+            let rawName = null;
+            if (Array.isArray(row)) {
+                rawName = nameCol < row.length ? row[nameCol] : null;
+            } else if (row && typeof row === 'object') {
+                // In case rows are objects keyed by header
+                rawName = row[headers[nameCol]] || row[state.importedHeaders[nameCol]];
+            }
+
+            // Convert to string — handle numbers, 0, booleans
+            const name = (rawName != null && rawName !== '') ? String(rawName).trim() : '';
+            if (!name) {
+                skipped++;
+                continue;
+            }
 
             // Store ALL columns (including the name column) as the full row record
             const fullRowData = {};
             headers.forEach((h, ci) => {
-                if (row[ci] != null && String(row[ci]).trim()) {
-                    fullRowData[h] = String(row[ci]).trim();
+                const cellVal = Array.isArray(row) ? row[ci] : row[h];
+                if (cellVal != null && String(cellVal).trim() !== '') {
+                    fullRowData[h] = String(cellVal).trim();
                 }
             });
 
             // originalData excludes the name column (for display purposes)
             const originalData = {};
             headers.forEach((h, ci) => {
-                if (ci !== nameCol && row[ci] != null && String(row[ci]).trim()) {
-                    originalData[h] = String(row[ci]).trim();
+                if (ci !== nameCol) {
+                    const cellVal = Array.isArray(row) ? row[ci] : row[h];
+                    if (cellVal != null && String(cellVal).trim() !== '') {
+                        originalData[h] = String(cellVal).trim();
+                    }
                 }
             });
 
@@ -360,13 +398,17 @@
                 fullRowData: fullRowData,
                 originalData: originalData,
                 enrichedData: {},
-                enrichStatus: 'pending', // pending | enriched | failed
+                enrichStatus: 'pending',
                 enrichCallId: null,
                 importedAt: new Date().toISOString(),
                 enrichedAt: null,
                 source: state.importFileName
             });
-        });
+        }
+
+        if (skipped > 0) {
+            showToast(`${skipped} rows skipped (empty company name)`, 'warning');
+        }
 
         // Append to existing companies
         state.companies = state.companies.concat(newCompanies);
@@ -590,12 +632,8 @@
 
                 const message = `@Perplexity give me the key details for ${companyName}`;
 
-                // Send via /functions/llm — @Perplexity in the prompt
-                // routes to Perplexity through BlueFlame
-                const postResult = await client.sendLLMRequest(message, '', {
-                    temperature: 0.1,
-                    max_tokens: 4096
-                });
+                // Send via /functions/llm/model with model: "perplexity"
+                const postResult = await client.sendLLMRequestModel('perplexity', message);
 
                 if (!postResult.ok) {
                     throw new Error(`API error: ${postResult.status} ${postResult.statusText}`);
