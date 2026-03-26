@@ -125,11 +125,11 @@ const BLUEFLAME_API = {
         icon: 'fas fa-robot',
         endpoints: [
             {
-                id: 'bot-request',
-                name: 'Send a Bot Request',
+                id: 'llm-request',
+                name: 'Send an LLM Request',
                 method: 'POST',
-                path: '/functions/bot',
-                description: 'Send a conversational request to the BlueFlame bot for interactive extraction.',
+                path: '/functions/llm',
+                description: 'Send a conversational request to the BlueFlame LLM endpoint for interactive extraction.',
                 body: JSON.stringify({
                     message: "Summarize the key financial metrics from the uploaded income statement.",
                     session_id: "",

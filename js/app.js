@@ -504,7 +504,7 @@
     }
 
     /**
-     * Get the company name to send to @Grata.
+     * Get the company name to send to @perplexity.
      * Uses company.name — the value from the Company Name Column
      * the user explicitly selected during import.
      * Validates it's a real company name (not a number/ID).
@@ -588,9 +588,9 @@
 
                 addEnrichLog('fa-building', `[${i + 1}/${companiesToEnrich.length}] Enriching: ${companyName}${companyName !== company.name ? ' (resolved from row)' : ''}...`, '');
 
-                const message = `@Grata give me the key details for ${companyName}`;
+                const message = `@perplexity give me the key details for ${companyName}`;
 
-                // Send bot request
+                // Send LLM request
                 const postResult = await client.sendBotRequest(message);
 
                 if (!postResult.ok) {
@@ -682,7 +682,7 @@
         log.scrollTop = log.scrollHeight;
     }
 
-    /** Schema fields we expect from the @grata bot response */
+    /** Schema fields we expect from the @perplexity LLM response */
     const ENRICH_SCHEMA = {
         'Company Description': ['company_description', 'description', 'company description', 'overview', 'summary', 'about'],
         'Industry / Sector': ['industry_sector', 'industry / sector', 'industry', 'sector', 'industry/sector', 'vertical'],
@@ -696,7 +696,7 @@
     };
 
     /**
-     * Parse enrichment output from the @grata bot response.
+     * Parse enrichment output from the @perplexity LLM response.
      * Extracts JSON from the response and maps keys to our schema.
      */
     function parseEnrichmentOutput(output) {

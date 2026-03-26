@@ -331,7 +331,7 @@ class BlueFlameClient {
             body.file_name = file.name;
             body.content_type = file.contentType;
         }
-        return this.post('/functions/bot', body);
+        return this.post('/functions/llm', body);
     }
 
     async getCallStatus(callId) {
