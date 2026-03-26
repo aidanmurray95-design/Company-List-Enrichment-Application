@@ -833,70 +833,86 @@
     }
 
     /**
-     * Extract structured fields from a Perplexity markdown response.
+     * Extract structured fields from a ChatGPT/Perplexity markdown response.
      *
-     * Perplexity typically returns:
-     *   1. A lead paragraph (the description)
-     *   2. Bullet points: - **Label:** Value
-     *
-     * Strategy:
-     *   Step 1: Extract all "- **Label:** Value" pairs into a map
-     *   Step 2: Map extracted labels to our schema fields
-     *   Step 3: If Description wasn't in bullets, use the first paragraph
+     * ChatGPT typically returns:
+     *   1. A lead paragraph (the description — no label)
+     *   2. Standalone bold fields: **Label:** Value (on their own line)
+     *   3. Multi-line sections: **Executives:**\n- **Name:** Title\n- ...
+     *   4. Sometimes bullet lists: - **Label:** Value
+     *   5. Sometimes tables: | Label | Value |
      */
     function parseMarkdownResponse(text) {
         if (!text || text.length < 20) return null;
         const result = {};
 
-        // Clean markdown links [text](url) → text, strip citation superscripts
+        // Strip citations block at the end
+        const citationIdx = text.indexOf('<p><h4>Citations:');
+        const cleanText = citationIdx > -1 ? text.substring(0, citationIdx) : text;
+
+        // Clean markdown links, superscripts, HTML tags, bold markers
         const clean = (s) => s
             .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+            .replace(/\(\[?[^\)]*utm_source[^\)]*\)/g, '')
             .replace(/<sup>\d+<\/sup>/g, '')
             .replace(/<[^>]+>/g, '')
             .replace(/\*\*/g, '')
             .replace(/\s+/g, ' ')
             .trim();
 
-        // Step 1: Extract all "- **Label:** Value" bullet pairs
-        const bulletPattern = /[-*]\s*\*\*([^*]+)\*\*[:\s]+(.+?)(?=\n[-*]\s*\*\*|\n\n|\n<p>|$)/gs;
         const extracted = {};
         let match;
-        while ((match = bulletPattern.exec(text)) !== null) {
+
+        // ── Pattern 1 (run first): Multi-line sections ──
+        // **Executives:**\n- **Name:** Title\n- **Name:** Title
+        // Must run before standalone pattern so the full list is captured
+        const multiLinePattern = /\*\*([^*]+?)\*\*[:\s]*\n((?:\s*[-*]\s*\*\*[^\n]+\n?)+)/g;
+        while ((match = multiLinePattern.exec(cleanText)) !== null) {
+            const label = match[1].trim().replace(/:+$/, '').toLowerCase();
+            const subItems = match[2].trim().split('\n')
+                .map(line => clean(line.replace(/^[-*]\s*/, '')))
+                .filter(v => v.length > 1);
+            if (subItems.length > 0 && !extracted[label]) {
+                extracted[label] = subItems.join('; ');
+            }
+        }
+
+        // ── Pattern 2: Standalone **Label:** Value on its own line ──
+        //   **Industry:** Healthcare Technology
+        //   **Headquarters:** Dallas, Texas
+        const standalonePattern = /(?:^|\n)\*\*([^*\n]+?)\*\*[:\s]+([^\n]+)/g;
+        while ((match = standalonePattern.exec(cleanText)) !== null) {
             const label = match[1].trim().replace(/:+$/, '').toLowerCase();
             const value = clean(match[2]);
-            if (value && value.length > 1) {
+            if (value && value.length > 1 && !extracted[label]) {
                 extracted[label] = value;
             }
         }
 
-        // Also extract **Section Header:**\n\nParagraph content
-        const sectionPattern = /\*\*([^*]+)\*\*[:\s]*\n\n([^*\n][^\n]+)/g;
-        while ((match = sectionPattern.exec(text)) !== null) {
+        // ── Pattern 3: Bullet pairs: - **Label:** Value ──
+        const bulletPattern = /[-*]\s*\*\*([^*]+)\*\*[:\s]+(.+?)(?=\n[-*]\s*\*\*|\n\n|\n<p>|$)/gs;
+        while ((match = bulletPattern.exec(cleanText)) !== null) {
             const label = match[1].trim().replace(/:+$/, '').toLowerCase();
             const value = clean(match[2]);
-            if (value && value.length > 5 && !extracted[label]) {
+            if (value && value.length > 1 && !extracted[label]) {
                 extracted[label] = value;
             }
         }
 
-        // Also extract markdown table rows: | Label | Value |
-        // ChatGPT returns data as tables with | Field | Details | format
+        // ── Pattern 4: Table rows: | Label | Value | ──
         const tableRowPattern = /\|\s*\*?\*?([^|*]+?)\*?\*?\s*\|\s*([^|]+?)\s*\|/g;
-        while ((match = tableRowPattern.exec(text)) !== null) {
+        while ((match = tableRowPattern.exec(cleanText)) !== null) {
             const label = match[1].trim().replace(/:+$/, '').toLowerCase();
             const value = clean(match[2]);
-            // Skip header/separator rows
             if (label && value && value.length > 1 && !label.includes('---') && !value.includes('---')
-                && label !== 'field' && label !== 'category' && label !== 'detail' && label !== 'details' && label !== 'attribute') {
-                if (!extracted[label]) {
-                    extracted[label] = value;
-                }
+                && !['field', 'category', 'detail', 'details', 'attribute'].includes(label)) {
+                if (!extracted[label]) extracted[label] = value;
             }
         }
 
-        // Step 2: Map extracted labels to our schema fields
+        // ── Map extracted labels to schema fields ──
         const labelMap = {
-            'Company Description': ['description', 'overview', 'about', 'company description', 'summary'],
+            'Company Description': ['description', 'overview', 'about', 'company description', 'summary', 'company overview'],
             'Industry / Sector': ['industry', 'sector', 'industry/sector', 'primary industry', 'industry sector'],
             'Headquarters': ['headquarters', 'hq', 'location', 'headquartered', 'head office', 'address', 'office location'],
             'Employee Count': ['employees', 'employee count', 'headcount', 'team size', 'staff', 'number of employees'],
@@ -909,7 +925,6 @@
 
         for (const [schemaField, aliases] of Object.entries(labelMap)) {
             for (const alias of aliases) {
-                // Check exact match and partial match on extracted labels
                 for (const [label, value] of Object.entries(extracted)) {
                     if (label === alias || label.includes(alias) || alias.includes(label)) {
                         result[schemaField] = value;
@@ -920,29 +935,35 @@
             }
         }
 
-        // Step 3: If Description not found in bullets, use the first paragraph
+        // ── Description fallback: first paragraph (before any **bold** line) ──
         if (!result['Company Description']) {
-            // First substantial paragraph (before any ** or - bullets)
-            const firstPara = text.match(/^([A-Z][^]*?)(?:\n\n\*\*|\n\n-\s*\*\*|\n\n#{1,4}\s)/);
+            const firstPara = cleanText.match(/^([A-Z][^]*?)(?:\n\n\*\*|\n\n-\s*\*\*|\n\n#{1,4}\s|\n\n\|)/);
             if (firstPara) {
                 const desc = clean(firstPara[1]);
-                if (desc.length >= 30) {
-                    result['Company Description'] = desc;
-                }
+                if (desc.length >= 30) result['Company Description'] = desc;
             }
         }
 
-        // Step 4: Fallback — scan for common inline patterns
+        // ── Website fallback: first markdown link URL ──
         if (!result['Website']) {
-            const urlMatch = text.match(/\[([^\]]*)\]\((https?:\/\/[^\s\)]+)\)/);
-            if (urlMatch) result['Website'] = urlMatch[2].replace(/\?utm_source=openai$/, '');
+            const urlMatch = cleanText.match(/\*\*Website\*\*[:\s]*\[([^\]]*)\]\((https?:\/\/[^\s\)]+)\)/i);
+            if (urlMatch) {
+                result['Website'] = urlMatch[1] || urlMatch[2].replace(/\?utm_source=openai$/, '');
+            } else {
+                const anyUrl = cleanText.match(/\[([^\]]*)\]\((https?:\/\/[^\s\)]+)\)/);
+                if (anyUrl) result['Website'] = anyUrl[2].replace(/\?utm_source=openai$/, '');
+            }
         }
+
+        // ── Founded fallback: "Founded in YYYY" or "established in YYYY" ──
         if (!result['Founded Year']) {
-            const foundedMatch = text.match(/[Ff]ounded\s+in\s+(\d{4})/);
+            const foundedMatch = cleanText.match(/(?:founded|established)\s+(?:in\s+)?(\d{4})/i);
             if (foundedMatch) result['Founded Year'] = foundedMatch[1];
         }
+
+        // ── HQ fallback: "headquartered in ..." ──
         if (!result['Headquarters']) {
-            const hqMatch = text.match(/headquartered\s+in\s+([^.(\n]+)/i);
+            const hqMatch = cleanText.match(/headquartered\s+in\s+([^.(\n]+)/i);
             if (hqMatch) result['Headquarters'] = clean(hqMatch[1]);
         }
 
