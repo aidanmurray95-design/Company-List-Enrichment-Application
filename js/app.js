@@ -832,69 +832,105 @@
     }
 
     /**
-     * Extract structured fields from a markdown/text response.
-     * Looks for **Bold Label:** Value patterns and maps them to our schema.
+     * Extract structured fields from a Perplexity markdown response.
+     *
+     * Perplexity typically returns:
+     *   1. A lead paragraph (the description)
+     *   2. Bullet points: - **Label:** Value
+     *
+     * Strategy:
+     *   Step 1: Extract all "- **Label:** Value" pairs into a map
+     *   Step 2: Map extracted labels to our schema fields
+     *   Step 3: If Description wasn't in bullets, use the first paragraph
      */
     function parseMarkdownResponse(text) {
         if (!text || text.length < 20) return null;
         const result = {};
 
-        // Markdown extraction patterns for each schema field
-        const fieldPatterns = {
-            'Company Description': [
-                // First paragraph after the title (often the description)
-                /\n\n([A-Z][^#*\n]{30,300})/,
-                /(?:description|overview|about)[:\s]*\*?\*?\s*(.{20,500}?)(?:\n\n|\n-|\n\*)/i
-            ],
-            'Industry / Sector': [
-                /(?:specialt|industr|sector|services?)[yies]*[:\s]*\*?\*?\s*(.+?)(?:\n|$)/i,
-                /practice encompasses[^,]*(?:including|such as)\s+(.+?)(?:\.|$)/i
-            ],
-            'Headquarters': [
-                /(?:location|address|office|headquart|situated at|located at)[:\s]*\*?\*?\s*(.+?)(?:\n|$)/i,
-                /(\d+[^,\n]*(?:St|Ave|Blvd|Rd|Dr|Way|Ln)[^,\n]*,\s*[A-Z][^,\n]*,\s*[A-Z]{2}\s+\d{5})/
-            ],
-            'Employee Count': [
-                /(?:employee|headcount|staff|team size)[s]?[:\s]*\*?\*?\s*(.+?)(?:\n|$)/i
-            ],
-            'Revenue Estimate': [
-                /(?:revenue|financial)[s]?[:\s]*\*?\*?\s*(.+?)(?:\n|$)/i,
-                /total revenues?\s+of\s+(\$[\d,.]+)/i,
-                /revenues?\s*(?:of|:)\s*(\$[\d,.]+\s*(?:million|billion|M|B)?)/i
-            ],
-            'Founded Year': [
-                /(?:established|founded|filed)[:\s]*\*?\*?\s*(?:in|on)?\s*(.+?)(?:\n|$)/i,
-                /established in\s+(\w+\s+\d{4})/i,
-                /filed on\s+(\w+\s+\d+,?\s*\d{4})/i
-            ],
-            'Website': [
-                /(?:website|web|homepage|url)[:\s]*\*?\*?\s*\[?([^\]\s\n]+)/i,
-                /(https?:\/\/(?:www\.)?[^\s\)\]"<>]+)/i
-            ],
-            'Key Executives': [
-                /(?:leadership|ceo|executive|management|chief)[:\s]*\*?\*?\s*(.+?)(?:\n|$)/i,
-                /([A-Z][a-z]+\s+[A-Z][a-z]+)\s+serves?\s+as\s+(?:the\s+)?(.+?)(?:\.|$)/i
-            ],
-            'Ownership Type': [
-                /(?:legal structure|ownership|tax status|entity type|registered as)[:\s]*\*?\*?\s*(.+?)(?:\n|$)/i,
-                /registered as (?:a |an )?(.+?)(?:\s+under|\.|,)/i,
-                /501\(c\)\(3\)[^\n]*/i
-            ]
+        // Clean markdown links [text](url) → text, strip citation superscripts
+        const clean = (s) => s
+            .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+            .replace(/<sup>\d+<\/sup>/g, '')
+            .replace(/<[^>]+>/g, '')
+            .replace(/\*\*/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        // Step 1: Extract all **Label:** Value pairs from bullet points
+        // Matches: "- **Label:** Value" or "- **Label**: Value"
+        const bulletPattern = /[-*]\s*\*\*([^*]+)\*\*[:\s]+(.+?)(?=\n[-*]\s*\*\*|\n\n|\n<p>|$)/gs;
+        const extracted = {};
+        let match;
+        while ((match = bulletPattern.exec(text)) !== null) {
+            // Strip trailing colon from label
+            const label = match[1].trim().replace(/:+$/, '').toLowerCase();
+            const value = clean(match[2]);
+            if (value && value.length > 1) {
+                extracted[label] = value;
+            }
+        }
+
+        // Also extract **Section Header:**\n\nParagraph content
+        // (Perplexity puts Executives and Ownership as standalone sections)
+        const sectionPattern = /\*\*([^*]+)\*\*[:\s]*\n\n([^*\n][^\n]+)/g;
+        while ((match = sectionPattern.exec(text)) !== null) {
+            const label = match[1].trim().replace(/:+$/, '').toLowerCase();
+            const value = clean(match[2]);
+            if (value && value.length > 5 && !extracted[label]) {
+                extracted[label] = value;
+            }
+        }
+
+        // Step 2: Map extracted labels to our schema fields
+        const labelMap = {
+            'Company Description': ['description', 'overview', 'about', 'company description', 'summary'],
+            'Industry / Sector': ['industry', 'sector', 'industry/sector', 'primary industry', 'industry sector'],
+            'Headquarters': ['headquarters', 'hq', 'location', 'headquartered', 'head office', 'address', 'office location'],
+            'Employee Count': ['employees', 'employee count', 'headcount', 'team size', 'staff', 'number of employees'],
+            'Revenue Estimate': ['revenue', 'revenue estimate', 'annual revenue', 'estimated revenue', 'financials', 'total revenue'],
+            'Founded Year': ['founded', 'year founded', 'established', 'founding year', 'inception'],
+            'Website': ['website', 'url', 'web', 'official website', 'homepage'],
+            'Key Executives': ['executives', 'key executives', 'executive leadership', 'leadership', 'management', 'ceo', 'executive team', 'key personnel'],
+            'Ownership Type': ['ownership', 'ownership type', 'ownership status', 'company type', 'legal structure', 'ownership structure']
         };
 
-        for (const [field, patterns] of Object.entries(fieldPatterns)) {
-            for (const regex of patterns) {
-                const match = text.match(regex);
-                if (match) {
-                    let val = (match[2] ? `${match[1]} — ${match[2]}` : match[1] || match[0]).trim();
-                    // Clean up markdown formatting
-                    val = val.replace(/\*\*/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/<[^>]+>/g, '').trim();
-                    if (val.length > 2 && val.length < 500) {
-                        result[field] = val;
+        for (const [schemaField, aliases] of Object.entries(labelMap)) {
+            for (const alias of aliases) {
+                // Check exact match and partial match on extracted labels
+                for (const [label, value] of Object.entries(extracted)) {
+                    if (label === alias || label.includes(alias) || alias.includes(label)) {
+                        result[schemaField] = value;
                         break;
                     }
                 }
+                if (result[schemaField]) break;
             }
+        }
+
+        // Step 3: If Description not found in bullets, use the first paragraph
+        if (!result['Company Description']) {
+            // First substantial paragraph (before any ** or - bullets)
+            const firstPara = text.match(/^([A-Z][^]*?)(?:\n\n\*\*|\n\n-\s*\*\*|\n\n#{1,4}\s)/);
+            if (firstPara) {
+                const desc = clean(firstPara[1]);
+                if (desc.length >= 30) {
+                    result['Company Description'] = desc;
+                }
+            }
+        }
+
+        // Step 4: Fallback — scan for common inline patterns
+        if (!result['Website']) {
+            const urlMatch = text.match(/\[([^\]]*)\]\((https?:\/\/[^\s\)]+)\)/);
+            if (urlMatch) result['Website'] = urlMatch[2].replace(/\?utm_source=openai$/, '');
+        }
+        if (!result['Founded Year']) {
+            const foundedMatch = text.match(/[Ff]ounded\s+in\s+(\d{4})/);
+            if (foundedMatch) result['Founded Year'] = foundedMatch[1];
+        }
+        if (!result['Headquarters']) {
+            const hqMatch = text.match(/headquartered\s+in\s+([^.(\n]+)/i);
+            if (hqMatch) result['Headquarters'] = clean(hqMatch[1]);
         }
 
         return Object.keys(result).length > 0 ? result : null;
