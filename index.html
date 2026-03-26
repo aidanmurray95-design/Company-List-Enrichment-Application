@@ -206,9 +206,9 @@
                                     </div>
                                     <div style="margin-top:10px;padding:10px;background:var(--bg-secondary);border-radius:6px;border-left:3px solid #00d4ff;">
                                         <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:4px;">PROMPT</div>
-                                        <code style="font-size:12px;">@perplexity give me the key details for {Company Name}</code>
+                                        <code style="font-size:12px;">@Perplexity give me the key details for {Company Name}</code>
                                     </div>
-                                    <p style="margin:10px 0 0;color:var(--text-tertiary);font-size:12px;">Company name is resolved from each row record (typically the first name-like column). Response is parsed for:</p>
+                                    <p style="margin:10px 0 0;color:var(--text-tertiary);font-size:12px;">Uses the Company Name Column set during import. Sent via <code>POST /functions/llm</code>. Response (markdown or JSON) is parsed for:</p>
                                     <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:8px;">
                                         <span class="badge">Description</span>
                                         <span class="badge">Industry</span>

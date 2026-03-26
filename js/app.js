@@ -588,10 +588,14 @@
 
                 addEnrichLog('fa-building', `[${i + 1}/${companiesToEnrich.length}] Enriching: ${companyName}${companyName !== company.name ? ' (resolved from row)' : ''}...`, '');
 
-                const message = `@perplexity give me the key details for ${companyName}`;
+                const message = `@Perplexity give me the key details for ${companyName}`;
 
-                // Send LLM request
-                const postResult = await client.sendBotRequest(message);
+                // Send via /functions/llm — @Perplexity in the prompt
+                // routes to Perplexity through BlueFlame
+                const postResult = await client.sendLLMRequest(message, '', {
+                    temperature: 0.1,
+                    max_tokens: 4096
+                });
 
                 if (!postResult.ok) {
                     throw new Error(`API error: ${postResult.status} ${postResult.statusText}`);
@@ -696,54 +700,117 @@
     };
 
     /**
-     * Parse enrichment output from the @perplexity LLM response.
-     * Extracts JSON from the response and maps keys to our schema.
+     * Parse enrichment output from the @Perplexity LLM response.
+     * Tries JSON first, then falls back to markdown/text extraction.
      */
     function parseEnrichmentOutput(output) {
         if (output == null) return null;
-        let data = output;
 
-        // If string, try to extract JSON
-        if (typeof data === 'string') {
-            data = extractJsonFromString(data);
-            if (data === null) return null;
+        // If object, unwrap nested message/text/response
+        let raw = output;
+        if (typeof raw === 'object' && raw !== null) {
+            raw = raw.output || raw.message || raw.text || raw.response || raw.answer || JSON.stringify(raw);
+        }
+        if (typeof raw !== 'string') raw = String(raw);
+
+        // Try 1: JSON parsing with schema mapping
+        const jsonData = extractJsonFromString(raw);
+        if (jsonData && typeof jsonData === 'object' && !Array.isArray(jsonData)) {
+            const mapped = mapJsonToSchema(jsonData);
+            if (mapped && Object.keys(mapped).length > 0) return mapped;
         }
 
-        // Unwrap nested message/text/response fields
-        if (data && typeof data === 'object' && !Array.isArray(data)) {
-            const nested = data.message || data.text || data.response || data.answer;
-            if (nested && typeof nested === 'string') {
-                const inner = extractJsonFromString(nested);
-                if (inner && typeof inner === 'object' && !Array.isArray(inner)) {
-                    data = inner;
-                }
-            }
-        }
+        // Try 2: Extract structured data from markdown/text response
+        return parseMarkdownResponse(raw);
+    }
 
-        if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
-
-        // Map response keys to our schema
+    /** Map a JSON object's keys to our ENRICH_SCHEMA */
+    function mapJsonToSchema(data) {
         const result = {};
         const dataLower = {};
         for (const [k, v] of Object.entries(data)) {
             dataLower[k.toLowerCase().trim()] = v;
         }
-
         for (const [schemaField, aliases] of Object.entries(ENRICH_SCHEMA)) {
-            let matched = false;
             for (const alias of aliases) {
                 if (dataLower[alias] != null) {
                     const val = dataLower[alias];
                     result[schemaField] = typeof val === 'object' ? JSON.stringify(val) : String(val);
-                    matched = true;
                     break;
                 }
             }
-            if (!matched) {
-                // Fuzzy: check if any data key contains the alias or vice versa
+            if (!result[schemaField]) {
                 for (const [dataKey, dataVal] of Object.entries(dataLower)) {
                     if (aliases.some(a => dataKey.includes(a) || a.includes(dataKey)) && dataVal != null) {
                         result[schemaField] = typeof dataVal === 'object' ? JSON.stringify(dataVal) : String(dataVal);
+                        break;
+                    }
+                }
+            }
+        }
+        return Object.keys(result).length > 0 ? result : null;
+    }
+
+    /**
+     * Extract structured fields from a markdown/text response.
+     * Looks for **Bold Label:** Value patterns and maps them to our schema.
+     */
+    function parseMarkdownResponse(text) {
+        if (!text || text.length < 20) return null;
+        const result = {};
+
+        // Markdown extraction patterns for each schema field
+        const fieldPatterns = {
+            'Company Description': [
+                // First paragraph after the title (often the description)
+                /\n\n([A-Z][^#*\n]{30,300})/,
+                /(?:description|overview|about)[:\s]*\*?\*?\s*(.{20,500}?)(?:\n\n|\n-|\n\*)/i
+            ],
+            'Industry / Sector': [
+                /(?:specialt|industr|sector|services?)[yies]*[:\s]*\*?\*?\s*(.+?)(?:\n|$)/i,
+                /practice encompasses[^,]*(?:including|such as)\s+(.+?)(?:\.|$)/i
+            ],
+            'Headquarters': [
+                /(?:location|address|office|headquart|situated at|located at)[:\s]*\*?\*?\s*(.+?)(?:\n|$)/i,
+                /(\d+[^,\n]*(?:St|Ave|Blvd|Rd|Dr|Way|Ln)[^,\n]*,\s*[A-Z][^,\n]*,\s*[A-Z]{2}\s+\d{5})/
+            ],
+            'Employee Count': [
+                /(?:employee|headcount|staff|team size)[s]?[:\s]*\*?\*?\s*(.+?)(?:\n|$)/i
+            ],
+            'Revenue Estimate': [
+                /(?:revenue|financial)[s]?[:\s]*\*?\*?\s*(.+?)(?:\n|$)/i,
+                /total revenues?\s+of\s+(\$[\d,.]+)/i,
+                /revenues?\s*(?:of|:)\s*(\$[\d,.]+\s*(?:million|billion|M|B)?)/i
+            ],
+            'Founded Year': [
+                /(?:established|founded|filed)[:\s]*\*?\*?\s*(?:in|on)?\s*(.+?)(?:\n|$)/i,
+                /established in\s+(\w+\s+\d{4})/i,
+                /filed on\s+(\w+\s+\d+,?\s*\d{4})/i
+            ],
+            'Website': [
+                /(?:website|web|homepage|url)[:\s]*\*?\*?\s*\[?([^\]\s\n]+)/i,
+                /(https?:\/\/(?:www\.)?[^\s\)\]"<>]+)/i
+            ],
+            'Key Executives': [
+                /(?:leadership|ceo|executive|management|chief)[:\s]*\*?\*?\s*(.+?)(?:\n|$)/i,
+                /([A-Z][a-z]+\s+[A-Z][a-z]+)\s+serves?\s+as\s+(?:the\s+)?(.+?)(?:\.|$)/i
+            ],
+            'Ownership Type': [
+                /(?:legal structure|ownership|tax status|entity type|registered as)[:\s]*\*?\*?\s*(.+?)(?:\n|$)/i,
+                /registered as (?:a |an )?(.+?)(?:\s+under|\.|,)/i,
+                /501\(c\)\(3\)[^\n]*/i
+            ]
+        };
+
+        for (const [field, patterns] of Object.entries(fieldPatterns)) {
+            for (const regex of patterns) {
+                const match = text.match(regex);
+                if (match) {
+                    let val = (match[2] ? `${match[1]} — ${match[2]}` : match[1] || match[0]).trim();
+                    // Clean up markdown formatting
+                    val = val.replace(/\*\*/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/<[^>]+>/g, '').trim();
+                    if (val.length > 2 && val.length < 500) {
+                        result[field] = val;
                         break;
                     }
                 }
