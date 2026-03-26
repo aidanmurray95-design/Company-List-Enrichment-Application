@@ -283,7 +283,7 @@ class BlueFlameClient {
     }
 
     async sendLLMRequestModel(model, prompt, context = '', params = {}) {
-        return this.post('/functions/llm/model', {
+        return this.post('/functions/llm', {
             model, prompt, context, user_id: this.userId,
             parameters: { temperature: params.temperature ?? 0.1, max_tokens: params.max_tokens ?? 4096, ...params }
         });

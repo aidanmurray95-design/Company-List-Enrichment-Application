@@ -46,7 +46,7 @@ const BLUEFLAME_API = {
                 id: 'llm-request-model',
                 name: 'Send an LLM Request - Specific Model',
                 method: 'POST',
-                path: '/functions/llm/model',
+                path: '/functions/llm',
                 description: 'Send a prompt to a specific LLM model by name or ID.',
                 body: JSON.stringify({
                     model: "gpt-4",
