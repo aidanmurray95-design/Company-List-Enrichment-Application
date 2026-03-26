@@ -672,7 +672,7 @@
 
                 addEnrichLog('fa-building', `[${i + 1}/${companiesToEnrich.length}] Enriching: ${companyName}${companyName !== company.name ? ' (resolved from row)' : ''}...`, '');
 
-                const message = `@Perplexity give me the key details for ${companyName}`;
+                const message = `@Perplexity give me the details for ${companyName} including Description, Industry, Headquarters, Employees, Revenue, Founded, Website, Executives, Ownership`;
 
                 // Send via /functions/llm/model with model: "perplexity"
                 const postResult = await client.sendLLMRequestModel('perplexity', message);
