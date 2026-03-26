@@ -223,11 +223,10 @@
             // Populate company name column dropdown (uses mapped names)
             populateCompanyNameDropdown();
 
-            // Auto-detect company name column
-            const autoIdx = getMappedHeaders().findIndex(h => {
-                const l = h.toLowerCase();
-                return l.includes('company') || l.includes('name') || l.includes('firm') || l.includes('business') || l.includes('organization') || l.includes('entity');
-            });
+            // Auto-detect company name column using ranked matching.
+            // Priority: exact matches first, then "starts with", then "contains".
+            // This prevents "Parent Company" from winning over "Companies".
+            const autoIdx = autoDetectCompanyNameColumn(getMappedHeaders());
             if (autoIdx >= 0) {
                 $('#companyNameColumn').value = autoIdx;
                 state.companyNameColIndex = autoIdx;
@@ -239,6 +238,49 @@
         } catch (err) {
             showToast(`Error reading file: ${err.message}`, 'error');
         }
+    }
+
+    /**
+     * Auto-detect the company name column from headers using ranked matching.
+     * Returns the best column index, or -1 if none found.
+     *
+     * Priority (first match at highest tier wins):
+     *   Tier 1 (exact): header IS one of the target names
+     *   Tier 2 (starts with): header starts with a target keyword
+     *   Tier 3 (contains): header contains a target keyword
+     *
+     * Within each tier, leftmost column wins (spreadsheets put names left).
+     */
+    function autoDetectCompanyNameColumn(headers) {
+        // Exact header names that definitively mean "company name"
+        const exactMatches = [
+            'companies', 'company', 'company name', 'company_name',
+            'name', 'firm', 'firm name', 'business name', 'entity',
+            'entity name', 'organization', 'portfolio company',
+            'target', 'target name', 'issuer', 'borrower'
+        ];
+
+        // Tier 1: exact match (case-insensitive, trimmed)
+        for (let i = 0; i < headers.length; i++) {
+            const h = headers[i].toLowerCase().trim();
+            if (exactMatches.includes(h)) return i;
+        }
+
+        // Tier 2: header starts with a key term
+        const startsWithTerms = ['company', 'compan', 'firm', 'business', 'entity', 'organization'];
+        for (let i = 0; i < headers.length; i++) {
+            const h = headers[i].toLowerCase().trim();
+            if (startsWithTerms.some(t => h.startsWith(t))) return i;
+        }
+
+        // Tier 3: header contains a key term (but not as a qualifier like "Parent Company")
+        const containsTerms = ['company name', 'firm name', 'business name', 'entity name'];
+        for (let i = 0; i < headers.length; i++) {
+            const h = headers[i].toLowerCase().trim();
+            if (containsTerms.some(t => h.includes(t))) return i;
+        }
+
+        return -1;
     }
 
     /** Get the current mapped header names */
