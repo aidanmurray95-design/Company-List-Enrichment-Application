@@ -717,10 +717,10 @@
 
                 addEnrichLog('fa-building', `[${i + 1}/${companiesToEnrich.length}] Enriching: ${companyName}${companyName !== company.name ? ' (resolved from row)' : ''}...`, '');
 
-                const prompt = `@Perplexity give me the details for ${companyName} including Description, Industry, Headquarters, Employees, Revenue, Founded, Website, Executives, Ownership format the response as a table`;
+                const prompt = `@Chatgpt give me the details for ${companyName} including Description, Industry, Headquarters, Employees, Revenue, Founded, Website, Executives, Ownership`;
 
-                addEnrichLog('fa-search', `${companyName}: Sending Perplexity request...`, 'poll-info');
-                const result = await sendAndPoll(client, prompt, 'perplexity', companyName, addEnrichLog);
+                addEnrichLog('fa-robot', `${companyName}: Sending ChatGPT request...`, 'poll-info');
+                const result = await sendAndPoll(client, prompt, 'chatgpt', companyName, addEnrichLog);
                 const enriched = parseEnrichmentOutput(result);
 
                 if (enriched && Object.keys(enriched).length > 0) {
