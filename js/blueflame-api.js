@@ -21,8 +21,8 @@ class BlueFlameClient {
     constructor() {
         this.name = '';
         this.email = '';
-        this.statusPollInterval = 20000;  // 20s between status polls
-        this.statusPollMaxRetries = 15;   // 15 attempts × 20s = 5 minutes max
+        this.statusPollInterval = 10000;  // 10s between status polls
+        this.statusPollMaxRetries = 30;   // 30 attempts × 10s = 5 minutes max
         this.loadConfig();
     }
 
@@ -285,7 +285,7 @@ class BlueFlameClient {
     async sendLLMRequestModel(model, prompt, context = '', params = {}) {
         return this.post('/functions/llm', {
             model, prompt, context, user_id: this.userId,
-            parameters: { temperature: params.temperature ?? 0.1, max_tokens: params.max_tokens ?? 10000, ...params }
+            parameters: { temperature: params.temperature ?? 0.1, max_tokens: params.max_tokens ?? 4096, ...params }
         });
     }
 
