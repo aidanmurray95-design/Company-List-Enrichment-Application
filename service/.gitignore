@@ -1,0 +1,8 @@
+bin/
+obj/
+publish/
+*.user
+
+# Real config holds the cloud.ingestToken — never commit. Use config.example.json
+# as the template; install.ps1 copies it to config.json on first run.
+config.json

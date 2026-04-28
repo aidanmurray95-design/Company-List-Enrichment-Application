@@ -1,0 +1,12 @@
+{
+  "name": "blueflame-company-enrichment",
+  "version": "1.0.0",
+  "private": true,
+  "description": "BlueFlame Company Enrichment — static SPA + serverless ingest API",
+  "engines": {
+    "node": "20.x"
+  },
+  "dependencies": {
+    "@vercel/blob": "^2.3.3"
+  }
+}

@@ -40,7 +40,9 @@
         apiCallsVisible: false,
         explorerResponseTab: 'body',
         currentEndpoint: null,
-        currentCallDetail: null
+        currentCallDetail: null,
+        // Auto-ingest activity log
+        ingestLog: JSON.parse(localStorage.getItem('bf_ingest_log') || '[]')
     };
 
     const $ = (sel) => document.querySelector(sel);
@@ -60,6 +62,9 @@
         renderVisualizeTable();
         renderRecentImports();
         updateApiCallsBadge();
+        renderIngestLog();
+        $('#btnClearIngestLog')?.addEventListener('click', clearIngestLog);
+        initAutoIngest();
     });
 
     // ============================================
@@ -1703,6 +1708,23 @@
     function initConfigTab() {
         restoreConfigFields();
 
+        // Auto-ingest token (cloud mode)
+        const ingestField = $('#cfgIngestToken');
+        if (ingestField) ingestField.value = localStorage.getItem('bf_ingest_token') || '';
+        $('#btnSaveIngestToken')?.addEventListener('click', () => {
+            const val = ingestField?.value.trim() || '';
+            if (val) localStorage.setItem('bf_ingest_token', val);
+            else localStorage.removeItem('bf_ingest_token');
+            showToast(val ? 'Ingest token saved.' : 'Ingest token cleared.', 'success');
+        });
+        $('#btnToggleIngestToken')?.addEventListener('click', () => {
+            if (!ingestField) return;
+            const isPwd = ingestField.type === 'password';
+            ingestField.type = isPwd ? 'text' : 'password';
+            const icon = $('#btnToggleIngestToken i');
+            if (icon) icon.className = isPwd ? 'fas fa-eye-slash' : 'fas fa-eye';
+        });
+
         $('#cfgEmail').addEventListener('input', () => {
             const email = $('#cfgEmail').value.trim();
             const userIdField = $('#cfgUserId');
@@ -2065,6 +2087,240 @@
         a.download = fileName;
         a.click();
         URL.revokeObjectURL(url);
+    }
+
+    // ============================================
+    // AUTO-INGEST — picks transport based on where the page is loaded.
+    // localhost / file:// → ws://127.0.0.1:7321 (BlueFlameIngest service)
+    // anywhere else (e.g. Vercel)         → poll /api/pending
+    // ============================================
+    function initAutoIngest() {
+        const host = location.hostname;
+        const isLocal = host === 'localhost' || host === '127.0.0.1' || location.protocol === 'file:';
+        if (isLocal) initIngestWebSocket();
+        else initIngestPoller();
+    }
+
+    function setIngestPill(state, text) {
+        const dot = document.querySelector('#ingestPill .ingest-dot');
+        const label = document.querySelector('#ingestPill .ingest-text');
+        if (!dot || !label) return;
+        dot.classList.remove('connected', 'disconnected', 'connecting');
+        dot.classList.add(state);
+        label.textContent = text;
+    }
+
+    function flashIngestPill() {
+        const pill = $('#ingestPill');
+        if (!pill) return;
+        pill.classList.remove('flash');
+        void pill.offsetWidth;
+        pill.classList.add('flash');
+    }
+
+    async function deliverIngestedFile(name, bytes, sizeBytes, timestamp) {
+        const file = new File([bytes], name);
+        flashIngestPill();
+        appendIngestLog({
+            status: 'received',
+            name,
+            sizeBytes: sizeBytes ?? bytes.length,
+            timestamp: timestamp || new Date().toISOString()
+        });
+        showToast(`Auto-ingest: ${name}`, 'info');
+        if (state.activeTab !== 'import') switchTab('import');
+        await handleFileUpload(file);
+    }
+
+    function initIngestWebSocket() {
+        const url = 'ws://127.0.0.1:7321/ws';
+        let socket = null;
+        let backoffMs = 1000;
+        const maxBackoffMs = 30000;
+        let manuallyClosed = false;
+
+        function connect() {
+            setIngestPill('connecting', 'Auto-ingest: connecting…');
+            try {
+                socket = new WebSocket(url);
+            } catch (err) {
+                scheduleReconnect();
+                return;
+            }
+
+            socket.addEventListener('open', () => {
+                backoffMs = 1000;
+                setIngestPill('connected', 'Auto-ingest: watching');
+            });
+
+            socket.addEventListener('message', async (ev) => {
+                let msg;
+                try { msg = JSON.parse(ev.data); }
+                catch (err) { console.error('[ingest] bad payload', err); return; }
+
+                if (msg.type === 'file' && msg.name && msg.contentBase64) {
+                    try {
+                        const bytes = base64ToBytes(msg.contentBase64);
+                        await deliverIngestedFile(msg.name, bytes, msg.sizeBytes, msg.timestamp);
+                    } catch (err) {
+                        console.error('[ingest] failed to handle file', err);
+                        appendIngestLog({
+                            status: 'error',
+                            name: msg.name || '(unknown)',
+                            sizeBytes: msg.sizeBytes ?? 0,
+                            reason: err.message,
+                            timestamp: new Date().toISOString()
+                        });
+                        showToast(`Auto-ingest error: ${err.message}`, 'error');
+                    }
+                } else if (msg.type === 'reject' && msg.name) {
+                    appendIngestLog({
+                        status: 'rejected',
+                        name: msg.name,
+                        sizeBytes: msg.sizeBytes ?? 0,
+                        reason: msg.reason || 'rejected',
+                        timestamp: msg.timestamp || new Date().toISOString()
+                    });
+                }
+            });
+
+            socket.addEventListener('close', () => {
+                setIngestPill('disconnected', 'Auto-ingest: off');
+                if (!manuallyClosed) scheduleReconnect();
+            });
+
+            socket.addEventListener('error', () => {
+                // 'close' will fire next; reconnect is handled there
+            });
+        }
+
+        function scheduleReconnect() {
+            setTimeout(connect, backoffMs);
+            backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
+        }
+
+        function base64ToBytes(b64) {
+            const binary = atob(b64);
+            const len = binary.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+            return bytes;
+        }
+
+        window.addEventListener('beforeunload', () => {
+            manuallyClosed = true;
+            if (socket && socket.readyState === WebSocket.OPEN) socket.close();
+        });
+
+        connect();
+    }
+
+    function initIngestPoller() {
+        const POLL_MS = 3000;
+        const ERROR_BACKOFF_MS = 15000;
+        let consecutiveErrors = 0;
+
+        function token() {
+            return localStorage.getItem('bf_ingest_token') || '';
+        }
+
+        async function pollOnce() {
+            const t = token();
+            if (!t) {
+                setIngestPill('disconnected', 'Auto-ingest: token not set');
+                return;
+            }
+            try {
+                const resp = await fetch('/api/pending', {
+                    headers: { 'Authorization': `Bearer ${t}` }
+                });
+                if (resp.status === 401 || resp.status === 403) {
+                    setIngestPill('disconnected', 'Auto-ingest: bad token');
+                    consecutiveErrors++;
+                    return;
+                }
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const { items } = await resp.json();
+                consecutiveErrors = 0;
+                setIngestPill('connected', items.length > 0
+                    ? `Auto-ingest: ${items.length} pending`
+                    : 'Auto-ingest: watching');
+                for (const item of items) {
+                    await processCloudItem(item, t);
+                }
+            } catch (err) {
+                consecutiveErrors++;
+                console.warn('[ingest] poll failed', err);
+                setIngestPill('disconnected', 'Auto-ingest: offline');
+            }
+        }
+
+        async function processCloudItem(item, t) {
+            try {
+                const fileResp = await fetch(item.downloadUrl);
+                if (!fileResp.ok) throw new Error(`download HTTP ${fileResp.status}`);
+                const buf = await fileResp.arrayBuffer();
+                await deliverIngestedFile(item.name, new Uint8Array(buf), item.size, item.uploadedAt);
+                await fetch(`/api/pending/${encodeURIComponent(item.id)}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${t}` }
+                });
+            } catch (err) {
+                console.error('[ingest] cloud item failed', item.id, err);
+                appendIngestLog({
+                    status: 'error',
+                    name: item.name,
+                    sizeBytes: item.size,
+                    reason: err.message,
+                    timestamp: new Date().toISOString()
+                });
+            }
+        }
+
+        async function loop() {
+            await pollOnce();
+            const wait = consecutiveErrors > 2 ? ERROR_BACKOFF_MS : POLL_MS;
+            setTimeout(loop, wait);
+        }
+
+        setIngestPill('connecting', 'Auto-ingest: connecting…');
+        loop();
+    }
+
+    function appendIngestLog(entry) {
+        state.ingestLog.unshift(entry);
+        if (state.ingestLog.length > 50) state.ingestLog = state.ingestLog.slice(0, 50);
+        try { localStorage.setItem('bf_ingest_log', JSON.stringify(state.ingestLog)); } catch {}
+        renderIngestLog();
+    }
+
+    function renderIngestLog() {
+        const container = $('#ingestLog');
+        if (!container) return;
+        if (state.ingestLog.length === 0) {
+            container.innerHTML = '<div class="empty-state small"><i class="fas fa-inbox"></i><p>No inbound files yet</p></div>';
+            return;
+        }
+        const iconFor = (s) => s === 'received' ? 'fa-check' : s === 'rejected' ? 'fa-ban' : 'fa-exclamation-triangle';
+        container.innerHTML = state.ingestLog.map(e => `
+            <div class="ingest-log-entry">
+                <span class="ingest-log-icon ${escapeAttr(e.status)}"><i class="fas ${iconFor(e.status)}"></i></span>
+                <div class="ingest-log-body">
+                    <div class="ingest-log-name" title="${escapeAttr(e.name)}">${escapeHtml(e.name)}</div>
+                    <div class="ingest-log-meta">
+                        <span>${escapeHtml(formatFileSize(e.sizeBytes || 0))}</span>
+                        <span>${escapeHtml(getTimeAgo(e.timestamp))}</span>
+                    </div>
+                    ${e.reason ? `<div class="ingest-log-reason">${escapeHtml(e.reason)}</div>` : ''}
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function clearIngestLog() {
+        state.ingestLog = [];
+        try { localStorage.removeItem('bf_ingest_log'); } catch {}
+        renderIngestLog();
     }
 
     $('#btnRefresh')?.addEventListener('click', () => {

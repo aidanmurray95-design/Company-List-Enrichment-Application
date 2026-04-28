@@ -68,6 +68,10 @@
             <button class="btn-menu" id="btnMenu"><i class="fas fa-bars"></i></button>
             <div class="breadcrumb" id="breadcrumb"><span>Import Companies</span></div>
             <div class="top-bar-actions">
+                <div class="ingest-pill" id="ingestPill" title="BlueFlame Ingest service status">
+                    <span class="ingest-dot disconnected"></span>
+                    <span class="ingest-text">Auto-ingest: off</span>
+                </div>
                 <button class="btn-icon" id="btnRefresh" title="Refresh"><i class="fas fa-sync-alt"></i></button>
                 <button class="btn-icon" id="btnThemeToggle" title="Toggle Theme"><i class="fas fa-moon"></i></button>
             </div>
@@ -153,6 +157,13 @@
                     <div class="card">
                         <div class="card-header"><h3><i class="fas fa-history"></i> Recent Imports</h3></div>
                         <div class="recent-submissions" id="recentImports"><div class="empty-state small"><i class="fas fa-clock"></i><p>No recent imports</p></div></div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <h3><i class="fas fa-satellite-dish"></i> Auto-Ingest Activity</h3>
+                            <button class="btn btn-sm btn-ghost" id="btnClearIngestLog" title="Clear log"><i class="fas fa-trash"></i></button>
+                        </div>
+                        <div class="ingest-log" id="ingestLog"><div class="empty-state small"><i class="fas fa-inbox"></i><p>No inbound files yet</p></div></div>
                     </div>
                 </div>
             </div>
@@ -610,6 +621,29 @@
                             <div class="config-info-row"><span class="config-info-label">REST_API_ENDPOINT:</span><span class="config-info-value" id="infoEndpoint">&mdash;</span></div>
                             <div class="config-info-row"><span class="config-info-label">Auth method:</span><span class="config-info-value">X-Api-Key: {{API_TOKEN}}</span></div>
                             <div class="config-info-row"><span class="config-info-label">Last connected:</span><span class="config-info-value" id="infoLastConnected">&mdash;</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Auto-Ingest -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-satellite-dish"></i> Auto-Ingest (Cloud Mode)</h3>
+                    </div>
+                    <div class="config-form">
+                        <p style="color:var(--text-secondary);font-size:13px;margin:0 0 12px;">
+                            Required when this app is opened from the Vercel deploy (not <code>localhost</code>). The browser polls <code>/api/pending</code> for files uploaded by the BlueFlameIngest Windows service. Token must match the <code>INGEST_TOKEN</code> env var on the Vercel project and the value in the service's <code>config.json</code>.
+                        </p>
+                        <div class="form-group">
+                            <label><i class="fas fa-key"></i> Ingest Token</label>
+                            <div class="input-with-action">
+                                <input type="password" id="cfgIngestToken" class="form-control" placeholder="Paste INGEST_TOKEN here…">
+                                <button class="btn-icon" id="btnToggleIngestToken" title="Show/Hide Token"><i class="fas fa-eye"></i></button>
+                            </div>
+                            <span class="form-hint">Stored in your browser's localStorage only.</span>
+                        </div>
+                        <div class="config-actions">
+                            <button class="btn btn-primary" id="btnSaveIngestToken"><i class="fas fa-save"></i> Save Token</button>
                         </div>
                     </div>
                 </div>

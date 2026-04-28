@@ -1,0 +1,25 @@
+{
+  "watchFolder": "C:\\BlueFlameInbox",
+  "processedFolder": "C:\\BlueFlameInbox\\processed",
+  "rejectedFolder": "C:\\BlueFlameInbox\\rejected",
+  "dedupeStorePath": "C:\\BlueFlameInbox\\.dedupe.json",
+  "webSocketPort": 7321,
+  "fileSettleMs": 750,
+  "maxLockWaitSeconds": 30,
+
+  "mode": "ws",
+  "cloud": {
+    "ingestUrl": "https://your-app.vercel.app/api/ingest",
+    "ingestToken": "REPLACE_WITH_VERCEL_INGEST_TOKEN",
+    "httpTimeoutSeconds": 60
+  },
+
+  "gates": {
+    "extensions": [".xlsx", ".xls", ".csv"],
+    "filenamePattern": null,
+    "minBytes": 100,
+    "maxBytes": 26214400,
+    "maxAgeMinutes": null,
+    "dedupeByHash": true
+  }
+}

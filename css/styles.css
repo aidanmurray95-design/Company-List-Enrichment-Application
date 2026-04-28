@@ -579,3 +579,29 @@ select.form-control { cursor: pointer; }
 [data-theme="dark"] .validation-pass { background: rgba(0,176,80,0.15); }
 [data-theme="dark"] .validation-fail { background: rgba(192,57,43,0.15); }
 [data-theme="dark"] .validation-info { background: rgba(52,101,101,0.15); }
+
+/* ── Auto-ingest pill (top bar) ── */
+.ingest-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 12px; background: var(--bg-secondary); font-size: 12px; color: var(--text-secondary); user-select: none; cursor: default; }
+.ingest-dot { width: 8px; height: 8px; border-radius: 50%; background: #c0392b; transition: background 0.2s; }
+.ingest-dot.connected { background: #00b050; box-shadow: 0 0 0 3px rgba(0,176,80,0.15); }
+.ingest-dot.connecting { background: #f0cc69; }
+.ingest-dot.disconnected { background: #c0392b; }
+.ingest-pill.flash { animation: ingest-flash 0.8s ease-out; }
+@keyframes ingest-flash {
+    0% { background: rgba(0,176,80,0.4); }
+    100% { background: var(--bg-secondary); }
+}
+
+/* ── Auto-ingest activity log (Import tab sidebar) ── */
+.ingest-log { max-height: 320px; overflow-y: auto; padding: 4px 0; }
+.ingest-log-entry { display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border-color); font-size: 12px; }
+.ingest-log-entry:last-child { border-bottom: none; }
+.ingest-log-icon { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 10px; }
+.ingest-log-icon.received { background: rgba(0,176,80,0.15); color: #00b050; }
+.ingest-log-icon.rejected { background: rgba(192,57,43,0.15); color: #c0392b; }
+.ingest-log-icon.error    { background: rgba(240,204,105,0.25); color: #b8860b; }
+.ingest-log-body { flex: 1; min-width: 0; }
+.ingest-log-name { font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ingest-log-meta { color: var(--text-tertiary); font-size: 11px; margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; }
+.ingest-log-reason { color: #c0392b; font-size: 11px; margin-top: 4px; word-break: break-word; }
+
